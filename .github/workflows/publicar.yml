@@ -46,12 +46,14 @@ jobs:
             nome: Windows
             comando: npm run dist:win -- --publish never
             ficheiros: dist/*.exe
+            limpar: \.exe$
           - os: ubuntu-latest
             nome: Linux
             comando: npm run dist:linux -- --publish never
             ficheiros: |
               dist/*.AppImage
               dist/*.deb
+            limpar: \.(AppImage|deb)$
 
     steps:
       - uses: actions/checkout@v4
@@ -89,6 +91,16 @@ jobs:
           # criar a Release. Quem chegar em segundo falha aqui, e não faz mal.
           gh release create "$TAG" --generate-notes --title "NEXO $TAG" 2>/dev/null || true
 
+          # Apagar ficheiros de versoes anteriores DESTA plataforma. Sem isto,
+          # um NEXO.Setup.2.0.0.exe fica ao lado do 2.1.0 e quem chega a
+          # Release nao sabe qual descarregar. So os desta plataforma: os dois
+          # sistemas correm ao mesmo tempo e um nao pode apagar o que o outro
+          # acabou de enviar.
+          for antigo in $(gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null | grep -E "$LIMPAR" || true); do
+            echo "a remover ficheiro antigo: $antigo"
+            gh release delete-asset "$TAG" "$antigo" --yes || true
+          done
+
           # nullglob: um padrão sem correspondência desaparece em vez de
           # passar como texto. Sem isto, o Windows tentava enviar um ficheiro
           # chamado "dist/*.AppImage" e o comando morria.
@@ -103,4 +115,5 @@ jobs:
           gh release upload "$TAG" "${ficheiros[@]}" --clobber
         env:
           TAG: ${{ github.ref_name }}
+          LIMPAR: ${{ matrix.limpar }}
           GH_TOKEN: ${{ github.token }}
