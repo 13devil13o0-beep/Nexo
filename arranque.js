@@ -29,6 +29,7 @@ const { spawn } = require('child_process');
 
 const dispositivo = require('./orchestrator/dispositivo');
 const definicoes = require('./orchestrator/definicoes');
+const diagnostico = require('./orchestrator/diagnostico');
 
 const RAIZ = __dirname;
 const PORTA = process.env.PORT || 7777;
@@ -227,6 +228,60 @@ function lancarServico(decisao) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// PRIMEIRA VEZ
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Uma instalação incompleta não deve rebentar com um erro de programador.
+ *
+ * Com terminal à frente, propõe-se resolver ali mesmo. Sem terminal — um
+ * serviço, um contentor — relata-se e segue-se, porque um servidor preso à
+ * espera de uma tecla que ninguém vai carregar é pior do que um servidor a
+ * funcionar pela metade.
+ *
+ * @returns {Promise<boolean>} continuar a arrancar?
+ */
+async function garantirInstalacao(decisao) {
+  const estado = diagnostico.diagnosticar({ perfil: decisao.perfil });
+  if (estado.pronto) return true;
+
+  console.log(diagnostico.formatarDiagnostico(estado));
+
+  const interactivo = !!(process.stdout.isTTY && process.stdin.isTTY);
+  if (!interactivo) {
+    console.warn('   (sem terminal para perguntar — a arrancar assim mesmo)');
+    console.warn('   Para resolver: npm run instalar');
+    console.warn('');
+    return true;
+  }
+
+  const resposta = await new Promise(resolve => {
+    const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+    rl.question('   Queres que trate disso agora? (S/n): ', r => { rl.close(); resolve(r.trim()); });
+  });
+
+  if (resposta && !/^s|^y/i.test(resposta)) {
+    console.log('');
+    console.log('   Quando quiseres: npm run instalar');
+    console.log('');
+    return true;
+  }
+
+  const instalador = spawn(process.execPath, [path.join(RAIZ, 'instalar.js')], {
+    stdio: 'inherit',
+    env: process.env
+  });
+
+  const codigo = await new Promise(resolve => instalador.on('close', resolve));
+  if (codigo !== 0) return false;
+
+  // Recarregar o .env que o instalador acabou de escrever, senão este
+  // processo continuaria a não ver as chaves que a pessoa configurou.
+  require('dotenv').config({ override: true });
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════════
 // PRINCIPAL
 // ═══════════════════════════════════════════════════════════
 
@@ -244,6 +299,11 @@ async function principal() {
     console.log('   (relatório apenas — não foi arrancado nada)');
     console.log('');
     return;
+  }
+
+  if (!await garantirInstalacao(decisao)) {
+    console.error('   A instalação não ficou completa. Corre "npm run instalar" quando puderes.');
+    process.exit(1);
   }
 
   switch (decisao.perfil) {

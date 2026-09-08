@@ -2027,6 +2027,135 @@ describe('🗣️ Pedidos de missão em texto', () => {
 
 
 // ═══════════════════════════════════════════════════════════
+// DIAGNÓSTICO DE INSTALAÇÃO — o que falta, dito a quem não é programador
+// ═══════════════════════════════════════════════════════════
+
+describe('🩹 Diagnóstico de instalação', () => {
+  const diagnostico = require('../orchestrator/diagnostico');
+
+  // Uma máquina fingida: tudo presente, salvo indicação em contrário.
+  const maquina = (extras = {}) => ({
+    versaoNode: '20.11.0',
+    env: { GROQ_API_KEY: 'gsk_umachavequeparecereal12345' },
+    raiz: 'C:/fake',
+    existe: () => true,
+    ollama: { presente: false, modelos: [] },
+    ...extras
+  });
+
+  test('Node recente passa', () => {
+    const r = diagnostico.verificarNode('20.11.0');
+    assert(r.ok, 'a 20 devia passar');
+    assertEqual(r.maior, 20);
+  });
+
+  test('Node antigo é apanhado antes de rebentar', () => {
+    const r = diagnostico.verificarNode('16.20.0');
+    assert(!r.ok, 'a 16 não tem fetch global');
+  });
+
+  test('sem node_modules, faltam as bibliotecas', () => {
+    const r = diagnostico.verificarDependencias('C:/fake', () => false);
+    assert(!r.ok);
+    assertEqual(r.instalado, false);
+  });
+
+  test('node_modules incompleto é detectado', () => {
+    // Existe tudo menos o express.
+    const existe = (p) => !String(p).endsWith('express');
+    const r = diagnostico.verificarDependencias('C:/fake', existe);
+    assert(!r.ok, 'faltando o express não está pronto');
+    assert(r.faltam.includes('express'));
+  });
+
+  test('o Electron conta à parte das essenciais', () => {
+    const existe = (p) => !String(p).endsWith('electron');
+    const r = diagnostico.verificarDependencias('C:/fake', existe);
+    assert(r.ok, 'sem Electron as essenciais continuam completas');
+    assertEqual(r.electron, false);
+  });
+
+  test('reconhece uma chave configurada', () => {
+    const f = diagnostico.fornecedoresConfigurados({ GROQ_API_KEY: 'gsk_chavelongaqueparecereal' });
+    assertEqual(f.length, 1);
+    assertEqual(f[0].nome, 'Groq');
+  });
+
+  test('um valor de exemplo por substituir não conta como configurado', () => {
+    // É o erro mais comum: copiar o .env.example e não trocar nada.
+    const f = diagnostico.fornecedoresConfigurados({ GROQ_API_KEY: 'gsk_xxxxxxxxxxxxxxxxxxx' });
+    assertEqual(f.length, 0, 'o placeholder do .env.example não é uma chave');
+  });
+
+  test('chave demasiado curta não conta', () => {
+    assertEqual(diagnostico.fornecedoresConfigurados({ GROQ_API_KEY: 'abc' }).length, 0);
+  });
+
+  test('máquina completa está pronta', () => {
+    const d = diagnostico.diagnosticar(maquina());
+    assert(d.pronto, `devia estar pronta: ${JSON.stringify(d.problemas)}`);
+    assertEqual(d.problemas.length, 0);
+  });
+
+  test('sem motor de IA não está pronta, e explica-se sem jargão', () => {
+    const d = diagnostico.diagnosticar(maquina({ env: {} }));
+    assert(!d.pronto);
+
+    const problema = d.problemas.find(p => p.id === 'sem-ia');
+    assert(problema, 'devia acusar falta de IA');
+    assertIncludes(problema.humano, 'pensar');
+    assert(!problema.humano.includes('API_KEY'), 'a mensagem humana não fala em variáveis');
+  });
+
+  test('o Ollama sozinho já chega para estar pronta', () => {
+    const d = diagnostico.diagnosticar(maquina({
+      env: {},
+      ollama: { presente: true, modelos: ['llama3.2'] }
+    }));
+    assert(d.pronto, 'com modelo local não falta motor de IA');
+  });
+
+  test('Node antigo entra como problema que não se resolve sozinho', () => {
+    const d = diagnostico.diagnosticar(maquina({ versaoNode: '16.0.0' }));
+    const p = d.problemas.find(x => x.id === 'node-antigo');
+    assert(p, 'devia acusar o Node');
+    assertEqual(p.podeSerAutomatico, false, 'instalar o Node é do utilizador');
+  });
+
+  test('faltar bibliotecas é problema que se resolve sozinho', () => {
+    const d = diagnostico.diagnosticar(maquina({ existe: () => false }));
+    const p = d.problemas.find(x => x.id === 'sem-dependencias');
+    assert(p, 'devia acusar as bibliotecas');
+    assertEqual(p.podeSerAutomatico, true);
+  });
+
+  test('um só fornecedor é aviso, não problema', () => {
+    const d = diagnostico.diagnosticar(maquina());
+    assert(d.pronto, 'um fornecedor chega para funcionar');
+    assert(d.avisos.some(a => a.id === 'um-so-fornecedor'), 'mas avisa que não há reserva');
+  });
+
+  test('dois fornecedores já não geram o aviso de reserva', () => {
+    const d = diagnostico.diagnosticar(maquina({
+      env: { GROQ_API_KEY: 'gsk_chavelongaqueparecereal', CEREBRAS_API_KEY: 'csk-outrachavelonga' }
+    }));
+    assert(!d.avisos.some(a => a.id === 'um-so-fornecedor'));
+  });
+
+  test('o relatório diz o que falta e como se resolve', () => {
+    const texto = diagnostico.formatarDiagnostico(diagnostico.diagnosticar(maquina({ env: {} })));
+    assertIncludes(texto, 'Estado da instalação');
+    assertIncludes(texto, 'npm run instalar');
+  });
+
+  test('o relatório de uma máquina pronta di-lo', () => {
+    const texto = diagnostico.formatarDiagnostico(diagnostico.diagnosticar(maquina()));
+    assertIncludes(texto, 'pronto a usar');
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
 // RESULTADO FINAL
 // ═══════════════════════════════════════════════════════════
 

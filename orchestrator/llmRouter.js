@@ -41,6 +41,20 @@ const PROVIDERS = {
     supportsTools: true,
     format: 'openai' // OpenAI-compatible API
   },
+  openai: {
+    name: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    keyEnv: 'OPENAI_API_KEY',
+    model: process.env.OPENAI_MODEL || 'gpt-4o',
+    fallbackModel: 'gpt-4o-mini',
+    maxTokens: 4096,
+    supportsStreaming: true,
+    supportsVision: true,
+    supportsTools: true,
+    format: 'openai',
+    // Como o Anthropic: so entra na cadeia via LLM_PROVIDER_ORDER, porque e
+    // pago e ninguem deve comecar a gastar dinheiro sem ter pedido.
+  },
   anthropic: {
     name: 'Anthropic',
     baseUrl: 'https://api.anthropic.com/v1',

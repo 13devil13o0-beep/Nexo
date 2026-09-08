@@ -75,13 +75,17 @@ is best suited for each task.
 
 ```bash
 git clone https://github.com/13devil13o0-beep/Nexo.git
-cd NEXO
-npm install
-npm run setup     # Configura API key gratuita (Groq)
-npm run dev        # Inicia desktop + API
+cd Nexo
+npm run instalar   # Verifica, instala e configura a IA — guiado, em português
+npm start          # Arranca no modo certo para este computador
 ```
 
-> **API Key grátis:** [console.groq.com/keys](https://console.groq.com/keys) → 14.400 pedidos/dia, 0€.
+> O `npm run instalar` trata de tudo: confirma a versão do Node, descarrega só
+> as bibliotecas que **este** computador precisa e ajuda-te a escolher o motor
+> de IA — grátis na nuvem (Groq, Cerebras), a tua própria chave paga, ou tudo
+> local com [Ollama](https://ollama.com/download), sem internet e sem conta.
+>
+> Já instalado e algo deixou de funcionar? `npm run diagnostico` diz o que falta.
 
 ---
 
