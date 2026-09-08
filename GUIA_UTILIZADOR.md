@@ -56,6 +56,19 @@ Cada chave é testada contra o fornecedor **antes** de ser gravada — não acab
 a instalação convencido de que está tudo bem para só descobrires na primeira
 frase que não estava.
 
+No fim, se o computador tiver ecrã, o instalador pergunta se queres um
+**ícone do NEXO na área de trabalho** — um clique para abrir, em vez de teres
+de vir sempre a um terminal. Funciona em Windows, macOS e Linux, com o
+mecanismo nativo de cada sistema (nunca um instalador de terceiros). Perdeste
+o ícone ou mudaste a pasta do projecto de sítio? `npm run atalho` recria-o a
+qualquer momento.
+
+Sem ecrã, ou se preferires sempre o terminal ou o browser, o instalador
+escreve na mesma um ficheiro `COMO_ABRIR.md` na raiz do projecto, com os
+comandos para cada interface e o endereço para abrir de outro dispositivo na
+mesma rede — para não teres de te lembrar do que apareceu no ecrã da
+instalação.
+
 > **Já instalado e alguma coisa deixou de funcionar?** `npm run diagnostico`
 > diz o que falta e como se resolve. Também apanha nomes de variáveis escritos
 > por pouco — um `CEREBRAS_APY_KEY` em vez de `CEREBRAS_API_KEY` comporta-se

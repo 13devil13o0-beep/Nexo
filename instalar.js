@@ -37,6 +37,8 @@ const readline = require('readline');
 const { spawn } = require('child_process');
 
 const diagnostico = require('./orchestrator/diagnostico');
+const atalho = require('./orchestrator/atalho');
+const referencia = require('./orchestrator/referencia');
 const dispositivo = require('./orchestrator/dispositivo');
 const definicoes = require('./orchestrator/definicoes');
 
@@ -448,7 +450,50 @@ async function principal() {
     await configurarIA();
   }
 
-  // ── 5. Confirmação final ──
+  // ── 5. Ícone na área de trabalho ──
+  // Só faz sentido onde há uma área de trabalho para o pôr. O clique corre
+  // exactamente "node arranque.js" — a mesma porta de entrada do "npm start",
+  // por isso respeita o perfil que acabaste de escolher, sem uma segunda
+  // lógica de arranque a poder divergir da primeira.
+  if (atalho.sistemaSuportado() && decisao.sinais.graficos && !definicoes.obter('atalhoCriado')) {
+    console.log('');
+    linha();
+    console.log('  🖱️  ÍCONE NA ÁREA DE TRABALHO');
+    linha();
+    console.log('');
+    console.log('   Posso criar um ícone do NEXO para abrires com um clique,');
+    console.log('   em vez de teres de vir sempre a um terminal.');
+    console.log('');
+
+    if (await sim('   Queres o ícone?')) {
+      const resultado = atalho.criar();
+      console.log('');
+      if (resultado.ok) {
+        console.log('   ✅ Ícone criado.');
+        if (resultado.caminho) console.log(`      ${resultado.caminho}`);
+        if (resultado.caminhos) resultado.caminhos.forEach(c => console.log(`      ${c}`));
+        if (resultado.iconeIncluido === false) {
+          console.log('      (por agora aparece com o ícone genérico do sistema)');
+        }
+        definicoes.definir('atalhoCriado', true);
+      } else {
+        console.log(`   ❌ Não consegui criar o ícone: ${resultado.motivo || 'razão desconhecida'}`);
+        console.log('      Podes tentar depois com: npm run atalho');
+      }
+    } else {
+      console.log('');
+      console.log('   Sem problema. Quando quiseres: npm run atalho');
+      console.log('');
+    }
+  }
+
+  // Escrito no disco, não só impresso aqui: três meses depois de instalar,
+  // ninguém se lembra do que passou no ecrã, mas o ficheiro continua ao lado
+  // do README. Corre sempre, com ou sem ecrã — é a resposta para "prefiro
+  // usar de outra forma" e para quem não tem onde pôr um ícone.
+  referencia.escrever();
+
+  // ── 6. Confirmação final ──
   console.log('');
   linha('=');
   const final = await diagnostico.diagnosticarCompleto({ perfil: decisao.perfil });
@@ -463,7 +508,10 @@ async function principal() {
     console.log('');
     console.log('  Outros comandos úteis:');
     console.log('     npm run diagnostico   ver o estado da instalação');
+    console.log('     npm run atalho        (re)criar o ícone na área de trabalho');
     console.log('     npm run setup         configurar Telegram, Discord e afins');
+    console.log('');
+    console.log(`  Formas de abrir o NEXO, escritas em: ${referencia.FICHEIRO}`);
     console.log('');
   }
 

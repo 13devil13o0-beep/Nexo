@@ -13,6 +13,7 @@ npm run diagnostico   # O que está bem, o que falta e como se resolve
 | Comando | O que faz |
 |---------|-----------|
 | `npm run diagnostico` | Estado da instalação (Node, bibliotecas, motor de IA) |
+| `npm run atalho` | (Re)cria o ícone de arranque na área de trabalho |
 | `npm run dispositivo` | Que perfil de arranque este aparelho justifica |
 | `npm run providers` | Fornecedores conhecidos: quem sabe ferramentas, quem é local |
 | `npm run check:models` | Avisa se algum fornecedor descontinuou o modelo configurado |

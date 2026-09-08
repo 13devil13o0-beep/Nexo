@@ -2261,6 +2261,143 @@ describe('🔤 Nomes de variáveis escritos por pouco', () => {
 
 
 // ═══════════════════════════════════════════════════════════
+// ATALHO DE ARRANQUE — ícone na área de trabalho
+// ═══════════════════════════════════════════════════════════
+
+describe('🖱️ Atalho de arranque', () => {
+  const atalho = require('../orchestrator/atalho');
+  const fs = require('fs');
+  const path = require('path');
+  const os = require('os');
+
+  test('reconhece os três sistemas suportados', () => {
+    assert(atalho.sistemaSuportado('win32'));
+    assert(atalho.sistemaSuportado('darwin'));
+    assert(atalho.sistemaSuportado('linux'));
+  });
+
+  test('rejeita sistemas desconhecidos', () => {
+    assert(!atalho.sistemaSuportado('freebsd'));
+    assertEqual(atalho.criar('freebsd').ok, false);
+  });
+
+  test('o caminho da Desktop segue o utilizador actual', () => {
+    assertIncludes(atalho.caminhoDesktop(), 'Desktop');
+  });
+
+  test('o alvo é sempre arranque.js, nunca um comando construído à mão', () => {
+    assertIncludes(atalho.CAMINHO_ARRANQUE, 'arranque.js');
+  });
+
+  test('usa o node deste processo, não um "node" genérico do PATH', () => {
+    assertEqual(atalho.NODE, process.execPath);
+  });
+
+  test('o Info.plist do macOS declara o executável e o ícone certos', () => {
+    const plist = atalho.plistNexo();
+    assertIncludes(plist, '<string>nexo</string>');
+    assertIncludes(plist, '<string>icon.icns</string>');
+  });
+
+  test('a entrada .desktop do Linux aponta para o node e o arranque.js certos', () => {
+    const conteudo = atalho.conteudoDesktopEntry();
+    assertIncludes(conteudo, 'Type=Application');
+    assertIncludes(conteudo, atalho.NODE);
+    assertIncludes(conteudo, 'arranque.js');
+    assertIncludes(conteudo, 'Terminal=false');
+  });
+
+  test('macOS: cria a estrutura completa do pacote .app numa pasta fingida', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nexo-mac-'));
+    const original = os.homedir;
+    os.homedir = () => tmp; // não se pode escrever na $HOME real num teste
+
+    try {
+      const r = atalho.criarAtalhoMac();
+
+      assert(r.ok, `devia ter sucesso: ${r.motivo}`);
+      assert(fs.existsSync(path.join(r.caminho, 'Contents', 'Info.plist')));
+
+      const executavel = path.join(r.caminho, 'Contents', 'MacOS', 'nexo');
+      assert(fs.existsSync(executavel));
+      assertIncludes(fs.readFileSync(executavel, 'utf8'), 'arranque.js');
+      assertEqual(typeof r.iconeIncluido, 'boolean');
+    } finally {
+      os.homedir = original;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('Linux: cria o lançador no menu de aplicações mesmo sem pasta Desktop', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nexo-linux-'));
+    const original = os.homedir;
+    os.homedir = () => tmp; // sem Desktop/ dentro de tmp — caso comum em DEs mínimos
+
+    try {
+      const r = atalho.criarAtalhoLinux();
+
+      assert(r.ok, `devia ter sucesso mesmo sem Desktop: ${r.motivo}`);
+      assertEqual(r.caminhos.length, 1, 'sem pasta Desktop, só o menu de aplicações');
+      assert(
+        r.caminhos[0].includes(path.join('.local', 'share', 'applications')),
+        'o lançador tem de ir para o menu de aplicações'
+      );
+    } finally {
+      os.homedir = original;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('Linux: cria também na Desktop quando ela existe', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nexo-linux-'));
+    fs.mkdirSync(path.join(tmp, 'Desktop'));
+    const original = os.homedir;
+    os.homedir = () => tmp;
+
+    try {
+      const r = atalho.criarAtalhoLinux();
+      assertEqual(r.caminhos.length, 2, 'com Desktop, ficam dois lançadores');
+    } finally {
+      os.homedir = original;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+
+describe('📄 Referência "Como Abrir"', () => {
+  const referencia = require('../orchestrator/referencia');
+
+  test('lista os quatro perfis de arranque', () => {
+    const texto = referencia.gerar();
+    assertIncludes(texto, '--modo=leve');
+    assertIncludes(texto, '--modo=consola');
+    assertIncludes(texto, '--modo=servico');
+    assertIncludes(texto, 'npm start');
+  });
+
+  test('inclui sempre o comando de diagnóstico e o de recriar o atalho', () => {
+    const texto = referencia.gerar();
+    assertIncludes(texto, 'npm run diagnostico');
+    assertIncludes(texto, 'npm run atalho');
+  });
+
+  test('acha um IPv4 de rede a partir de interfaces fingidas', () => {
+    const falsas = {
+      Loopback: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }],
+      'Wi-Fi': [{ family: 'IPv4', internal: false, address: '192.168.1.42' }]
+    };
+    assertEqual(referencia.enderecoLocal(falsas), '192.168.1.42');
+  });
+
+  test('sem interface de rede real, admite que não sabe em vez de inventar', () => {
+    const semRede = { Loopback: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }] };
+    assertEqual(referencia.enderecoLocal(semRede), null);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
 // RESULTADO FINAL
 // ═══════════════════════════════════════════════════════════
 

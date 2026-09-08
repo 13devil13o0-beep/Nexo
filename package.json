@@ -11,6 +11,7 @@
   "scripts": {
     "instalar": "node instalar.js",
     "diagnostico": "node scripts/diagnostico.js",
+    "atalho": "node scripts/atalho.js",
     "setup": "node setup.js",
     "cli": "node cli/cli.js",
     "start": "node arranque.js",
@@ -80,6 +81,7 @@
     "electron": "^44.0.0",
     "electron-builder": "^26.15.3",
     "png-to-ico": "^3.0.1",
+    "png2icons": "^2.0.1",
     "sharp": "^0.35.4"
   },
   "build": {

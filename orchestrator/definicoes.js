@@ -10,6 +10,8 @@
  *   modo               'auto' | 'completo' | 'leve' | 'consola' | 'servico'
  *   arrancarEscondido  no perfil completo, começa só na bandeja
  *   perfilPagina       'auto' | 'completo' | 'leve'  (peso da interface web)
+ *   atalhoCriado       já existe ícone na área de trabalho — não voltar a
+ *                      perguntar em cada "npm run instalar"
  */
 
 const fs = require('fs');
@@ -21,7 +23,8 @@ const FICHEIRO = path.join(PROJECT_ROOT, 'memory', 'definicoes.json');
 const PADRAO = Object.freeze({
   modo: 'auto',
   arrancarEscondido: false,
-  perfilPagina: 'auto'
+  perfilPagina: 'auto',
+  atalhoCriado: false
 });
 
 let cache = null;
