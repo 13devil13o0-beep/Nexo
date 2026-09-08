@@ -22,6 +22,7 @@ const providerHealth = require('./providerHealth');
 const codeRunner = require('../agents/codeRunner');
 const dispositivo = require('./dispositivo');
 const definicoes = require('./definicoes');
+const { abrirBrowser } = require('./browser');
 
 // Deploy helper (wizard AWS)
 let deployHelper;
@@ -998,6 +999,16 @@ server.listen(PORT, '0.0.0.0', () => {
 
   // Carrega o modelo local para memória, para a 1.ª mensagem ser rápida.
   llmRouter.warmupLocal();
+
+  // Abrir o browser sozinho — mas só quando este ficheiro é o arranque, ou
+  // seja, quando alguém correu "npm run core" directamente. Quando é o
+  // arranque.js a orquestrar (perfis leve/consola), é ELE que decide se e
+  // quando abrir o browser; abrir aqui também dava duas janelas para o mesmo
+  // endereço. NEXO_ABRIR_BROWSER=0 desliga mesmo neste caso, para scripts e
+  // ambientes automatizados que chamem este ficheiro sem querer nada visível.
+  if (require.main === module && process.env.NEXO_ABRIR_BROWSER !== '0') {
+    abrirBrowser(`http://localhost:${PORT}`);
+  }
 });
 
 module.exports = { app, server, wss };

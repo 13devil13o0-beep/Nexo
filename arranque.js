@@ -26,6 +26,7 @@ require('dotenv').config();
 
 const path = require('path');
 const { spawn } = require('child_process');
+const { abrirBrowser } = require('./orchestrator/browser');
 
 const dispositivo = require('./orchestrator/dispositivo');
 const definicoes = require('./orchestrator/definicoes');
@@ -60,25 +61,6 @@ async function motorJaDePe() {
     return false;
   } finally {
     clearTimeout(relogio);
-  }
-}
-
-/** Abre o browser do sistema. Cada sistema tem o seu comando. */
-function abrirBrowser(url, plataforma = process.platform) {
-  const comandos = {
-    win32: ['cmd', ['/c', 'start', '', url]],
-    darwin: ['open', [url]],
-    linux: ['xdg-open', [url]]
-  };
-
-  const [comando, argumentos] = comandos[plataforma] || comandos.linux;
-
-  try {
-    const p = spawn(comando, argumentos, { detached: true, stdio: 'ignore' });
-    p.on('error', () => { /* sem browser à mão: o endereço fica impresso na consola */ });
-    p.unref();
-  } catch (e) {
-    /* idem */
   }
 }
 
