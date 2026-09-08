@@ -28,11 +28,20 @@ on:
 
 permissions:
   contents: write
+  # A accao da SignPath vai buscar o artefacto ja construido. Declarar
+  # `permissions` poe a zero tudo o que nao estiver aqui, por isso o read
+  # sobre actions tem de estar escrito mesmo que hoje ainda nao se use.
+  actions: read
 
 jobs:
   construir:
     name: ${{ matrix.nome }}
     runs-on: ${{ matrix.os }}
+
+    # Um "if" nao consegue ler `secrets` directamente. Isto traduz "o segredo
+    # existe?" para uma variavel de ambiente que o "if" ja consegue ver.
+    env:
+      TEM_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
 
     strategy:
       fail-fast: false
@@ -75,13 +84,38 @@ jobs:
         run: ${{ matrix.comando }}
 
       # Guardados mesmo quando o disparo é manual e não há Release nenhuma
-      # para onde os enviar.
+      # para onde os enviar. Tambem e daqui que a SignPath os vai buscar.
       - name: Guardar como artefacto
+        id: artefacto
         uses: actions/upload-artifact@v4
         with:
           name: nexo-${{ matrix.nome }}
           path: ${{ matrix.ficheiros }}
           if-no-files-found: error
+
+      # ── ASSINATURA (SignPath Foundation) ────────────────────────────────
+      #
+      # Inerte ate haver credenciais: sem o segredo SIGNPATH_API_TOKEN este
+      # passo e saltado e o build continua a produzir instaladores nao
+      # assinados, como hoje. Assim que o certificado estiver activo, basta
+      # criar o segredo e as duas variaveis; nao ha nada a alterar aqui.
+      #
+      # Nao se aplica ao Linux: .AppImage e .deb nao usam Authenticode.
+      #
+      # A assinatura exige aprovacao manual na SignPath a cada versao — e de
+      # proposito, e e tambem uma exigencia da Foundation.
+      - name: Assinar com a SignPath
+        id: assinar
+        if: matrix.nome == 'Windows' && env.TEM_SIGNPATH == 'true'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.artefacto.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist
 
       - name: Publicar na Release
         if: startsWith(github.ref, 'refs/tags/v')

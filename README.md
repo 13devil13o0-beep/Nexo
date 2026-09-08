@@ -351,6 +351,19 @@ Depois adiciona padrões em `intentParser.js` e um `case` em `orchestrator.js`.
 
 ---
 
+## 🔒 Privacidade e assinatura de código
+
+O NEXO corre no teu computador. Não tem contas, não tem servidores nossos e
+não recolhe telemetria nenhuma — o que sai daqui é o texto que envias ao motor
+de IA que escolheste, e nem isso se usares o [Ollama](https://ollama.com).
+
+- **[Política de privacidade](docs/PRIVACIDADE.md)** — o que fica cá dentro, o
+  que sai, e como as capacidades de sistema estão travadas
+- **[Política de assinatura de código](docs/POLITICA_DE_ASSINATURA.md)** — como
+  os instaladores são construídos, assinados e verificados
+
+---
+
 ## 📜 Licença
 
 MIT License — vê [LICENSE](LICENSE)
