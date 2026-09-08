@@ -1,4 +1,12 @@
-# 🤖 MyAssistBOT
+# 🤖 Nexo
+
+NEXO is an open-source personal AI orchestration platform designed to
+connect multiple AI engines, tools, memory, automation, computer control
+and simulation into a single intelligent system.
+
+Use Claude, GPT, Gemini, Groq, Ollama and other engines through one
+orchestration layer — with NEXO deciding which engine, tool or workflow
+is best suited for each task.
 
 ### Assistente IA pessoal open-source com 16+ agentes autónomos, 6 interfaces, i18n multilingue (PT/EN/ES/FR) e controlo total do teu PC — 100% gratuito.
 
@@ -7,12 +15,12 @@
 [![Groq](https://img.shields.io/badge/AI-Groq%20LLaMA%203.3%2070B-orange)](https://groq.com)
 [![i18n](https://img.shields.io/badge/i18n-PT%20|%20EN%20|%20ES%20|%20FR-blue)](.)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Sponsor](https://img.shields.io/badge/❤️_Sponsor-MyAssistBOT-ff69b4)](https://buy.stripe.com/6oU6oH9Uf17qe4d6gees007)
+[![Sponsor](https://img.shields.io/badge/❤️_Sponsor-NEXO-ff69b4)](https://github.com/sponsors/13devil13o0-beep)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 ---
 
-> **💡 O que o diferencia?** Não é "mais um chat com IA". O MyAssistBOT é um *agente de sistema* — abre apps, controla o teclado/rato, cria projetos inteiros por descrição, pesquisa a web, gera PDFs, monitoriza o sistema, aprende as tuas preferências (Smart Memory), automatiza workflows, e funciona em desktop, browser, Telegram, Discord e terminal. Suporta 4 idiomas (PT/EN/ES/FR) e múltiplos provedores de IA (Groq, Cerebras, Gemini, HuggingFace, Ollama, ou o teu próprio).
+> **💡 O que o diferencia?** Não é "mais um chat com IA". O NEXO é um *agente de sistema* — abre apps, controla o teclado/rato, cria projetos inteiros por descrição, pesquisa a web, gera PDFs, monitoriza o sistema, aprende as tuas preferências (Smart Memory), automatiza workflows, e funciona em desktop, browser, Telegram, Discord e terminal. Suporta 4 idiomas (PT/EN/ES/FR) e múltiplos provedores de IA (Groq, Cerebras, Gemini, HuggingFace, Ollama, ou o teu próprio).
 
 ---
 
@@ -66,8 +74,8 @@
 ## 🚀 Início Rápido
 
 ```bash
-git clone https://github.com/njoymassagxprs-tech/MyAssistBOT.git
-cd MyAssistBOT
+git clone https://github.com/13devil13o0-beep/Nexo-.git
+cd NEXO
 npm install
 npm run setup     # Configura API key gratuita (Groq)
 npm run dev        # Inicia desktop + API
@@ -124,7 +132,7 @@ npm run dev:all
 ## 📦 Estrutura do Projeto
 
 ```
-MyAssistBOT/
+NEXO/
 ├── agents/                  # 16 Agentes especializados
 │   ├── aiAgent.js          # LLM Router multi-provedor
 │   ├── webSearchAgent.js   # DuckDuckGo / Serper
@@ -194,7 +202,7 @@ MyAssistBOT/
 
 ## 🌍 Internacionalização (i18n)
 
-O MyAssistBOT suporta **4 idiomas** com deteção automática e preferências por utilizador:
+O NEXO suporta **4 idiomas** com deteção automática e preferências por utilizador:
 
 | Idioma | Código | Flag |
 |--------|--------|------|
@@ -215,7 +223,7 @@ Cada utilizador pode ter o seu próprio idioma (Telegram/Discord usam userId). O
 
 ## 🔀 Multi-Provedor de IA (LLM Router)
 
-O MyAssistBOT suporta **múltiplos provedores de IA** com fallback automático:
+O NEXO suporta **múltiplos provedores de IA** com fallback automático:
 
 | Prioridade | Provedor | Modelo | Custo |
 |:----------:|----------|--------|:-----:|
@@ -241,9 +249,9 @@ Se um provedor falhar, o sistema tenta automaticamente o próximo. Podes também
 
 ---
 
-## 🆚 O que Torna o MyAssistBOT Diferente
+## 🆚 O que Torna o NEXO Diferente
 
-| Característica | ChatGPT | Open Interpreter | AutoGPT | Siri/Alexa | **MyAssistBOT** |
+| Característica | ChatGPT | Open Interpreter | AutoGPT | Siri/Alexa | **NEXO** |
 |---------------|:-------:|:----------------:|:-------:|:----------:|:---------:|
 | Gratuito (sem limites reais) | ❌ | ❌ | ❌ | ✅ | ✅ |
 | Controlo do OS (apps, processos) | ❌ | ✅ | ❌ | Parcial | ✅ |
@@ -289,8 +297,8 @@ npm run dist:win
 ```
 
 Os ficheiros ficam em `dist/`:
-- **`MyAssistBOT Setup X.X.X.exe`** — Instalador NSIS (com atalho no Desktop + Menu Iniciar)
-- **`MyAssistBOT X.X.X.exe`** — Versão portable (sem instalar)
+- **`NEXO Setup X.X.X.exe`** — Instalador NSIS (com atalho no Desktop + Menu Iniciar)
+- **`NEXO X.X.X.exe`** — Versão portable (sem instalar)
 
 > O ícone do executável é gerado automaticamente a partir de `assets/icon.svg`.
 
@@ -327,13 +335,14 @@ MIT License — vê [LICENSE](LICENSE)
 
 ## ❤️ Apoiar o Projeto
 
-O MyAssistBOT é **100% gratuito e open-source**. Se o projeto te é útil e queres apoiar o desenvolvimento, podes fazer uma doação através do Stripe:
+O NEXO é **100% gratuito e open-source**. Se o projeto te é útil e queres apoiar o desenvolvimento, podes fazer uma doação através do Stripe ou tornar-te sponsor no GitHub:
 
 | | Valor | Link |
 |:-:|:-----:|:----:|
 | ☕ | **3€** | [**Café para o dev**](https://buy.stripe.com/6oU6oH9Uf17qe4d6gees007) |
 | 🌟 | **5€** | [**Apoio ao projeto**](https://buy.stripe.com/7sYcN5aYj6rKf8h342es006) |
 | 🚀 | **10€** | [**Super impulso**](https://buy.stripe.com/5kQ5kDc2n03maS1gUSes005) |
+| 💛 | — | [**GitHub Sponsors**](https://github.com/sponsors/13devil13o0-beep) |
 
 > Cada doação ajuda a manter o projeto ativo, melhorar funcionalidades e cobrir custos de desenvolvimento. Obrigado! 🙏
 
@@ -350,7 +359,7 @@ O MyAssistBOT é **100% gratuito e open-source**. Se o projeto te é útil e que
 ---
 
 <p align="center">
-  <b>🤖 MyAssistBOT v2.0</b><br>
+  <b>🤖 NEXO v2.0</b><br>
   16+ agentes · 6 interfaces · 80+ comandos · 4 idiomas · 100% gratuito<br>
   <i>O teu Jarvis pessoal, open-source e multilingue.</i>
 </p>

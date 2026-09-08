@@ -1,5 +1,5 @@
 /**
- * 🧠 Orchestrator - Cérebro do MyAssistBOT
+ * 🧠 Orchestrator - Cérebro do NEXO
  * 
  * Coordena todos os agentes e processa pedidos
  */
@@ -29,6 +29,9 @@ const smartMemory = require('../memory/smartMemory');
 const { conversationStore } = require('../memory/conversationStore');
 const { decisionEngine } = require('../memory/decisionEngine');
 const i18n = require('../i18n/i18n');
+const toolLoop = require('./toolLoop');
+const tools = require('./tools');
+const permissions = require('./permissions');
 
 // Carregar plugins ao iniciar
 pluginLoader.loadAll();
@@ -742,18 +745,9 @@ async function handlePrompt(prompt, context = {}) {
       }
 
       case 'list_tasks': {
-        const tasks = automationAgent.listTasks(userId);
-        if (tasks.length === 0) {
-          response = t('automation.list_empty');
-        } else {
-          response = t('automation.list_header', { count: tasks.length }) + '\n\n';
-          tasks.forEach((tk, i) => {
-            const status = tk.enabled ? '✅' : '⏸️';
-            response += `${status} **${i + 1}. ${tk.name}**\n`;
-            response += `   🔄 ${tk.schedule.type} | ⏱️ ${tk.nextRun ? new Date(tk.nextRun).toLocaleString() : 'N/A'}\n`;
-            response += `   📊 ${tk.executionCount || 0}x\n\n`;
-          });
-        }
+        // listTasks devolve texto já formatado, não uma lista. Tratá-lo como
+        // array rebentava com "tasks.forEach is not a function".
+        response = automationAgent.listTasks(userId);
         break;
       }
 
@@ -788,11 +782,11 @@ async function handlePrompt(prompt, context = {}) {
       
       case 'remember': {
         const memResult = smartMemory.remember(prompt, userId);
-        if (memResult.success) {
-          response = t('memory.remember_success', { content: memResult.fact.content, category: memResult.fact.category });
-        } else {
-          response = `❌ ${memResult.error}`;
-        }
+        // remember devolve { success, message }, não { fact }. Ler .fact.content
+        // rebentava com "Cannot read properties of undefined".
+        response = memResult.success
+          ? memResult.message
+          : `❌ ${memResult.error || 'não consegui memorizar isso'}`;
         break;
       }
 
@@ -854,16 +848,8 @@ async function handlePrompt(prompt, context = {}) {
       }
 
       case 'list_skills': {
-        const skills = skillAgent.listSkills(userId);
-        if (skills.length === 0) {
-          response = t('skill.list_empty');
-        } else {
-          response = t('skill.list_header', { count: skills.length }) + '\n\n';
-          skills.forEach((s, i) => {
-            response += `${i + 1}. **"${s.trigger}"** → ${s.actions.length} step(s)\n`;
-            response += `   📊 ${s.usageCount || 0}x\n\n`;
-          });
-        }
+        // listSkills devolve texto já formatado, não uma lista.
+        response = skillAgent.listSkills(userId);
         break;
       }
 
@@ -990,18 +976,9 @@ async function handlePrompt(prompt, context = {}) {
       // ═══════════════════════════════════════════════════════
       
       case 'list_workflows': {
-        const workflows = workflowAgent.listWorkflows(userId);
-        if (workflows.length === 0) {
-          response = t('workflow.list_empty');
-        } else {
-          response = t('workflow.list_header', { count: workflows.length }) + '\n\n';
-          workflows.forEach((w, i) => {
-            const typeIcon = w.builtin ? '🏗️' : '👤';
-            response += `${typeIcon} **${i + 1}. ${w.name}**\n`;
-            response += `   ${w.description}\n`;
-            response += `   📊 ${w.steps.length} | ${w.usageCount || 0}x\n\n`;
-          });
-        }
+        // listWorkflows devolve texto formatado e o seu parâmetro é a
+        // categoria, não o utilizador. Passar o userId filtrava tudo.
+        response = workflowAgent.listWorkflows();
         break;
       }
 
@@ -1287,6 +1264,37 @@ async function handlePrompt(prompt, context = {}) {
         break;
       }
 
+      case 'grant_permission': {
+        const tool = intentData.entities.tool;
+        if (!tool || !tools.porNome(tool)) {
+          response = `❌ Não conheço a ferramenta "${tool || ''}". Diz "permissões" para ver quais existem.`;
+        } else {
+          permissions.conceder(userId, tool);
+          response = `✅ Ferramenta "${tool}" autorizada. Já a posso usar sem voltar a pedir.`;
+        }
+        break;
+      }
+
+      case 'revoke_permission': {
+        const tool = intentData.entities.tool;
+        const tinha = permissions.revogar(userId, tool);
+        response = tinha
+          ? `✅ Autorização de "${tool}" revogada.`
+          : `ℹ️ A ferramenta "${tool}" não estava autorizada.`;
+        break;
+      }
+
+      case 'list_permissions': {
+        const aprovadas = permissions.listar(userId);
+        const pol = permissions.politica();
+        response = `🔐 **Permissões de ferramentas**\n\n` +
+          `Política: ler=${pol.ler}, escrever=${pol.escrever}, sistema=${pol.sistema}\n\n` +
+          (aprovadas.length
+            ? `Autorizadas por ti:\n${aprovadas.map(a => `• ${a.ferramenta}`).join('\n')}`
+            : `Ainda não autorizaste nenhuma ferramenta de sistema.`);
+        break;
+      }
+
       case 'chat':
       default:
         // Verificar se há um plano de projeto pendente e o user confirmou
@@ -1306,7 +1314,29 @@ async function handlePrompt(prompt, context = {}) {
 
         // Usar IA para responder com contexto de conversa
         const history = conversationStore.getHistoryForContext(conversation.id, 8);
-        
+
+        // ═══ NÍVEL 2 DA CASCATA: ferramentas ═══
+        // Chegar aqui significa que nenhuma regra reconheceu o pedido. Antes
+        // caía-se logo em conversa genérica, mesmo havendo um agente capaz.
+        // Agora o modelo pode escolher entre um punhado de ferramentas, e só
+        // se isso não der nada é que se segue para o chat simples.
+        try {
+          const comFerramentas = await toolLoop.correr(prompt, { userId, historico: history });
+          if (comFerramentas && comFerramentas.texto) {
+            response = comFerramentas.texto;
+            if (comFerramentas.ferramentasUsadas.length) {
+              security.logAction(userId, 'tools-used', {
+                ferramentas: comFerramentas.ferramentasUsadas,
+                passos: comFerramentas.passos
+              });
+            }
+            break;
+          }
+        } catch (err) {
+          console.warn(`  ⚠️ Ciclo de ferramentas falhou: ${err.message}`);
+        }
+
+
         // Enriquecer com RAG se houver documentos indexados
         let enrichedPrompt = prompt;
         try {
@@ -1433,19 +1463,19 @@ ${t('agents.automation')}
    Status: ${t('agents.status_online')}
 
 ${t('agents.smart_memory')}
-   Status: ${t('agents.status_online')} (${t('agents.smart_memory_count', { count: smartMemory.recall('', 'default').length })})
+   Status: ${t('agents.status_online')} (${t('agents.smart_memory_count', { count: smartMemory.getStats().totalFacts })})
 
 ${t('agents.skill')}
-   Status: ${t('agents.status_online')} (${t('agents.skill_count', { count: skillAgent.listSkills('default').length })})
+   Status: ${t('agents.status_online')} (${t('agents.skill_count', { count: skillAgent.getStats().total })})
 
 ${t('agents.vision')}
    Status: ${visionAgent.isAvailable() ? t('agents.status_online') : t('agents.vision_needs_key')}
 
 ${t('agents.alert')}
-   Status: ${t('agents.status_online')} (${t('agents.alert_count', { count: alertAgent.listMonitors('default').length })})
+   Status: ${t('agents.status_online')} (${t('agents.alert_count', { count: alertAgent.getStats().total })})
 
 ${t('agents.workflow')}
-   Status: ${t('agents.status_online')} (${t('agents.workflow_count', { count: workflowAgent.listWorkflows('default').length })})
+   Status: ${t('agents.status_online')} (${t('agents.workflow_count', { count: workflowAgent.getStats().builtIn + workflowAgent.getStats().custom })})
 
 ${t('agents.clipboard')}
    Status: ${t('agents.status_online')}

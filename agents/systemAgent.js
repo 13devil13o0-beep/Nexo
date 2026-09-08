@@ -150,7 +150,7 @@ function expandPath(inputPath) {
   if (expanded === '.' || expanded === '') {
     expanded = process.cwd();
   }
-  // Se relativo, usar pasta user_data do MyAssistBOT
+  // Se relativo, usar pasta user_data do NEXO
   else if (!path.isAbsolute(expanded)) {
     // Criar user_data se não existir
     const userDataDir = path.join(process.cwd(), 'user_data');

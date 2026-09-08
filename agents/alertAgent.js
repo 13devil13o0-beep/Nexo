@@ -459,7 +459,7 @@ function httpGet(url, timeout = 10000) {
     const start = Date.now();
     const client = url.startsWith('https') ? https : http;
 
-    const req = client.get(url, { timeout, headers: { 'User-Agent': 'MyAssistBOT/2.0' } }, (res) => {
+    const req = client.get(url, { timeout, headers: { 'User-Agent': 'NEXO/2.0' } }, (res) => {
       let body = '';
       res.on('data', chunk => body += chunk);
       res.on('end', () => {

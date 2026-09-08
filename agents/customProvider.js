@@ -43,21 +43,21 @@ const PROVIDER_CATALOG = {
 
   anthropic: {
     name: 'Anthropic Claude',
-    description: 'Claude 3.5 Sonnet, Claude 4 — excelente em texto longo e código',
+    description: 'Claude Opus 5, Sonnet 5, Haiku 4.5 — excelente em texto longo e código',
     baseUrl: 'https://api.anthropic.com/v1',
     format: 'anthropic',
     models: [
-      { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', desc: 'Melhor equilíbrio qualidade/custo', recommended: true },
-      { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', desc: 'Rápido e muito capaz' },
-      { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', desc: 'Ultra-rápido, económico' },
-      { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', desc: 'Máxima qualidade, mais lento' }
+      { id: 'claude-opus-5', name: 'Claude Opus 5', desc: 'Máxima qualidade, contexto de 1M', recommended: true },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', desc: 'Melhor equilíbrio qualidade/custo, contexto de 1M' },
+      { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', desc: 'Ultra-rápido e económico, contexto de 200k' },
+      { id: 'claude-fable-5-1', name: 'Claude Fable 5.1', desc: 'O mais capaz, para raciocínio exigente' }
     ],
-    defaultModel: 'claude-sonnet-4-20250514',
+    defaultModel: 'claude-opus-5',
     maxTokens: 4096,
     supportsStreaming: true,
     supportsVision: true,
     website: 'https://console.anthropic.com/settings/keys',
-    pricing: '~$3/1M tokens (Sonnet)'
+    pricing: '~$5/1M entrada, ~$25/1M saída (Opus 5)'
   },
 
   mistral: {
@@ -383,7 +383,7 @@ async function callOpenAIFormat(config, messages, opts) {
   // OpenRouter precisa de headers extra
   if (config.providerId === 'openrouter') {
     headers['HTTP-Referer'] = 'https://myassistbot.app';
-    headers['X-Title'] = 'MyAssistBOT';
+    headers['X-Title'] = 'NEXO';
   }
 
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
@@ -499,7 +499,7 @@ async function streamOpenAIFormat(config, messages, onToken, onDone, opts) {
   };
   if (config.providerId === 'openrouter') {
     headers['HTTP-Referer'] = 'https://myassistbot.app';
-    headers['X-Title'] = 'MyAssistBOT';
+    headers['X-Title'] = 'NEXO';
   }
 
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
@@ -750,7 +750,7 @@ function hasCustomProvider(userId) {
  * Mensagem de boas-vindas/sugestão para configurar provider
  */
 function getOnboardingMessage() {
-  return `🔑 **Integra a tua IA Premium no MyAssistBOT!**
+  return `🔑 **Integra a tua IA Premium no NEXO!**
 
 Tens uma subscrição de uma IA paga? Integra-a aqui para usares diretamente no bot!
 

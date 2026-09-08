@@ -9,7 +9,7 @@
 require('dotenv').config();
 
 const SERPER_API_KEY = process.env.SERPER_API_KEY;
-const USER_AGENT = 'MyAssistBOT/2.0 (Personal Assistant)';
+const USER_AGENT = 'NEXO/2.0 (Personal Assistant)';
 
 // ═══════════════════════════════════════════════════════════
 // CLASSIFICADOR DE QUERY

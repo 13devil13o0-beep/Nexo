@@ -1,5 +1,5 @@
 /**
- * 🤖 MyAssistBOT - Discord Bot
+ * 🤖 NEXO - Discord Bot
  * Bot de Discord com comandos slash (i18n)
  */
 

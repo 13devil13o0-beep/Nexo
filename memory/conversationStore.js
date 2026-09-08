@@ -1,5 +1,5 @@
 /**
- * 💾 MyAssistBOT - Conversation Store
+ * 💾 NEXO - Conversation Store
  * Gestão de memória e histórico de conversas
  */
 
@@ -31,6 +31,9 @@ class ConversationStore {
    * Determina diretório de dados baseado no SO
    */
   getDataDirectory() {
+    // NAO renomear para NEXO: e o nome da pasta em %APPDATA% onde vivem as
+    // conversas ja gravadas. Mudar aqui deixa o historico do utilizador orfao.
+    // Uma futura migracao teria de copiar a pasta antiga para a nova.
     const appName = 'MyAssistBOT';
     
     // Variável de ambiente tem prioridade

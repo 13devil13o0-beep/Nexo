@@ -28,6 +28,10 @@ build/
 logs/
 memory/*.json
 memory/*.log
+memory/*.jsonl
+memory/*.jsonl.1
+memory/bench/
+memory/permissions.json
 
 # ═══════════════════════════════════════════════════════════
 # Dados do utilizador (nunca subir dados pessoais)

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MyAssistBOT — Dashboard</title>
+  <title>NEXO — Dashboard</title>
   <style>
     :root {
       --bg: #0f1117;
@@ -40,8 +40,22 @@
       align-items: center;
       justify-content: space-between;
       position: sticky; top: 0; z-index: 100;
+      /* Na janela do Electron não há moldura: sem uma zona de arrasto, quem
+         chega aqui fica com uma janela que não se consegue mexer. */
+      -webkit-app-region: drag;
     }
     .header-left { display: flex; align-items: center; gap: 16px; }
+    .header a, .header button { -webkit-app-region: no-drag; }
+    /* ── VOLTAR ── */
+    .back-btn {
+      display: inline-flex; align-items: center;
+      padding: 6px 14px; border-radius: 8px;
+      background: var(--card); border: 1px solid var(--border);
+      color: var(--text-dim); text-decoration: none;
+      font-size: 12px; font-weight: 600; transition: .2s;
+    }
+    .back-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .back-btn:focus-visible { outline: 2px solid var(--accent-light); outline-offset: 2px; }
     .logo { font-size: 24px; }
     .header h1 { font-size: 18px; font-weight: 600; }
     .header h1 span { color: var(--accent-light); }
@@ -180,8 +194,9 @@
   <!-- HEADER -->
   <div class="header">
     <div class="header-left">
+      <a class="back-btn" href="/" title="Voltar à conversa">← Voltar</a>
       <div class="logo">🤖</div>
-      <h1>MyAssist <span>SystemBOT</span> — Dashboard</h1>
+      <h1>NEXO <span>SystemBOT</span> — Dashboard</h1>
     </div>
     <div class="header-right">
       <div class="status-badge">
@@ -280,7 +295,7 @@
 
   <!-- FOOTER -->
   <div class="footer">
-    MyAssistBOT v2.0.0 — <a href="https://github.com/NjoY-MassagXprs/MyAssist_SystemBOT" target="_blank">GitHub</a>
+    NEXO v2.0.0 — <a href="https://github.com/13devil13o0-beep/Nexo-" target="_blank">GitHub</a>
   </div>
 
   <!-- Chart.js via CDN (lightweight) -->

@@ -5,7 +5,7 @@
  * 1. Copia este ficheiro e renomeia (ex: meu-plugin.js)
  * 2. Define os intents (padrões regex + handler)
  * 3. Move para a pasta plugins/
- * 4. Reinicia o MyAssistBOT — o plugin é carregado automaticamente!
+ * 4. Reinicia o NEXO — o plugin é carregado automaticamente!
  * 
  * NOTA: Ficheiros que começam com _ (como este) são ignorados.
  */

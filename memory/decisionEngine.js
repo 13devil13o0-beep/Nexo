@@ -1,5 +1,5 @@
 /**
- * 🧠 MyAssistBOT - Decision Engine
+ * 🧠 NEXO - Decision Engine
  * Decide se resposta deve ser falada, escrita ou ambos
  * Detecta ações sensíveis que requerem confirmação
  */

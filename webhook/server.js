@@ -1,5 +1,5 @@
 /**
- * 🔗 MyAssistBOT - Webhook Server
+ * 🔗 NEXO - Webhook Server
  * Servidor de webhooks para integração com serviços externos
  * - Stripe (pagamentos)
  * - GitHub (CI/CD, issues)
@@ -336,7 +336,7 @@ app.post('/webhook/dev', (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    service: 'MyAssistBOT Webhook Server',
+    service: 'NEXO Webhook Server',
     uptime: Math.floor(process.uptime()),
     timestamp: new Date().toISOString()
   });
@@ -345,9 +345,9 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.send(`
     <html>
-      <head><title>MyAssistBOT Webhooks</title></head>
+      <head><title>NEXO Webhooks</title></head>
       <body style="font-family: sans-serif; padding: 40px; background: #1a1a2e; color: #fff;">
-        <h1>🔗 MyAssistBOT Webhook Server</h1>
+        <h1>🔗 NEXO Webhook Server</h1>
         <p>Servidor de webhooks activo na porta ${PORT}</p>
         <h3>Endpoints disponíveis:</h3>
         <ul>
@@ -372,7 +372,7 @@ app.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║   🔗 MyAssistBOT Webhook Server                                 ║
+║   🔗 NEXO Webhook Server                                 ║
 ║                                                           ║
 ║   Porta: ${PORT}                                            ║
 ║   URL Local: http://localhost:${PORT}                       ║

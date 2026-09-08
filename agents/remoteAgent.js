@@ -1,7 +1,7 @@
 /**
  * 🌐 Remote Agent - Automação de Máquinas Remotas (Esqueleto)
  * 
- * Permite ao MyAssistBOT executar comandos em máquinas remotas via SSH.
+ * Permite ao NEXO executar comandos em máquinas remotas via SSH.
  * Necessita: npm install ssh2
  * 
  * FUNCIONALIDADES PLANEADAS:

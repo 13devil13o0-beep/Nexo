@@ -8,11 +8,12 @@
 require('dotenv').config();
 const llmRouter = require('../orchestrator/llmRouter');
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
-const FALLBACK_MODEL = 'mixtral-8x7b-32768';
+// Fonte única de verdade: os modelos vivem no llmRouter (orchestrator/llmRouter.js).
+// Reexportados aqui apenas para retrocompatibilidade (system info, testes).
+const GROQ_MODEL = llmRouter.PROVIDERS.groq.model;
+const FALLBACK_MODEL = llmRouter.PROVIDERS.groq.fallbackModel;
 
-const DEFAULT_SYSTEM = `És o MyAssistBOT, um assistente IA pessoal inteligente e proativo.
+const DEFAULT_SYSTEM = `És o NEXO, um assistente IA pessoal inteligente e proativo.
 
 PERSONALIDADE:
 - Profissional mas amigável
@@ -66,7 +67,9 @@ async function askAI(prompt, history = [], options = {}) {
       maxTokens,
       temperature,
       provider: options.provider,
-      userId: options.userId
+      userId: options.userId,
+      // true = pede o nível pago à frente (tarefas que exigem qualidade)
+      escalate: options.escalate
     });
 
     if (result.provider) {
@@ -120,7 +123,7 @@ async function askAIStream(prompt, history = [], onToken, options = {}) {
         }
         resolve(fullText);
       },
-      { maxTokens, temperature, provider: options.provider, userId: options.userId }
+      { maxTokens, temperature, provider: options.provider, userId: options.userId, escalate: options.escalate }
     ).catch(reject);
   });
 }
@@ -168,7 +171,8 @@ Responde APENAS com uma destas categorias:
 
 Categoria:`;
 
-  const response = await askAI(prompt, { maxTokens: 50, temperature: 0.1 });
+  // O 2.º argumento de askAI é o histórico, não as opções.
+  const response = await askAI(prompt, [], { maxTokens: 50, temperature: 0.1 });
   return response.trim().toLowerCase().replace(':', '');
 }
 

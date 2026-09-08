@@ -1,5 +1,5 @@
 /**
- * 🔒 MyAssistBOT Desktop - Preload Script
+ * 🔒 NEXO Desktop - Preload Script
  * 
  * Bridge segura entre renderer e main process
  */

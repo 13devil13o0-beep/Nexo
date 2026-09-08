@@ -306,7 +306,7 @@
 
   "system_info": {
     "title": "📊 **Estado do Sistema**",
-    "version": "🤖 **MyAssistBOT v2.0**",
+    "version": "🤖 **NEXO v2.0**",
     "uptime": "⏱️ Uptime: {{uptime}}",
     "memory": "💾 Memória: {{used}}MB / {{total}}MB",
     "platform": "💻 Plataforma: {{platform}} {{arch}}",
@@ -350,7 +350,7 @@
   },
 
   "help": {
-    "title": "🤖 **MyAssistBOT - Ajuda**",
+    "title": "🤖 **NEXO - Ajuda**",
     "basic": "📝 **Comandos Básicos**\n   /help - Esta mensagem\n   /status - Estado do sistema\n   /agents - Listar agentes",
     "time": "🕐 **Data e Hora**\n   \"Que horas são?\"\n   \"Qual é a data de hoje?\"",
     "examples": "💬 **Exemplos de Uso**\n   \"Qual é a capital de Portugal?\"\n   \"Cria um PDF sobre inteligência artificial\"\n   \"Criar nota: fazer compras amanhã\"\n   \"Listar ficheiros\"\n   \"Executar: console.log(2 + 2)\"",
@@ -399,7 +399,7 @@
   },
 
   "cli": {
-    "banner_title": "MyAssistBOT CLI v2.0.0",
+    "banner_title": "NEXO CLI v2.0.0",
     "commands_header": "Comandos:",
     "cmd_help": "/help     - Ver ajuda",
     "cmd_clear": "/clear    - Limpar ecrã",
@@ -430,9 +430,9 @@
   },
 
   "bot": {
-    "welcome": "🤖 *Olá {{name}}!*\n\nSou o *MyAssistBOT*, o teu assistente IA!\n\n*O que posso fazer:*\n🧠 Responder perguntas\n📄 Criar documentos PDF\n💻 Executar código\n📁 Gerir ficheiros\n\nEnvia-me uma mensagem ou usa /help para ver os comandos!",
+    "welcome": "🤖 *Olá {{name}}!*\n\nSou o *NEXO*, o teu assistente IA!\n\n*O que posso fazer:*\n🧠 Responder perguntas\n📄 Criar documentos PDF\n💻 Executar código\n📁 Gerir ficheiros\n\nEnvia-me uma mensagem ou usa /help para ver os comandos!",
     "help": "📋 *Comandos Disponíveis*\n\n*Geral:*\n/start - Iniciar conversa\n/help - Ver esta ajuda\n/status - Estado do bot\n\n*Agentes:*\n/pdf [descrição] - Criar PDF\n/code [código] - Executar código\n\n💡 Ou simplesmente envia a tua pergunta!",
-    "status": "📊 *Estado do MyAssistBOT*\n\n✅ Status: Online\n⏱️ Uptime: {{hours}}h {{mins}}m\n🧠 Modelo: {{model}}\n💾 Memória: {{memory}}MB",
+    "status": "📊 *Estado do NEXO*\n\n✅ Status: Online\n⏱️ Uptime: {{hours}}h {{mins}}m\n🧠 Modelo: {{model}}\n💾 Memória: {{memory}}MB",
     "unknown_cmd": "❓ Comando desconhecido.\nUsa /help para ver comandos disponíveis.",
     "no_response": "⚠️ Sem resposta",
     "orchestrator_unavailable": "⚠️ Orquestrador não disponível. Verifica a configuração.",
@@ -441,7 +441,7 @@
     "pdf_error": "❌ Erro ao criar PDF: {{message}}",
     "code_usage": "💻 Uso: /code [código JavaScript]\n\nExemplo: /code 2 + 2",
     "code_error": "❌ Erro: {{message}}",
-    "ask_question": "Fazer uma pergunta ao MyAssistBOT",
+    "ask_question": "Fazer uma pergunta ao NEXO",
     "your_question": "A tua pergunta",
     "create_pdf": "Criar um documento PDF",
     "doc_description": "Descrição do documento",
@@ -449,6 +449,6 @@
     "code_to_run": "Código a executar",
     "view_status": "Ver estado do bot",
     "view_help": "Ver ajuda",
-    "discord_help": "📋 **Comandos MyAssistBOT**\n\n**/ask** [pergunta] - Fazer uma pergunta\n**/pdf** [descrição] - Criar documento PDF\n**/code** [código] - Executar JavaScript\n**/status** - Ver estado do bot\n**/help** - Ver esta ajuda\n\n💡 Também podes mencionar @MyAssistBOT com a tua pergunta!"
+    "discord_help": "📋 **Comandos NEXO**\n\n**/ask** [pergunta] - Fazer uma pergunta\n**/pdf** [descrição] - Criar documento PDF\n**/code** [código] - Executar JavaScript\n**/status** - Ver estado do bot\n**/help** - Ver esta ajuda\n\n💡 Também podes mencionar @NEXO com a tua pergunta!"
   }
 }

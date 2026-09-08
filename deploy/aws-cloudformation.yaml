@@ -144,7 +144,7 @@ Resources:
           
           # Clonar repositorio
           cd /home/myassistbot
-          git clone https://github.com/NjoYMassaworXp/MyAssist_BOT.git bot
+          git clone https://github.com/13devil13o0-beep/Nexo-.git bot
           cd bot
           
           # Instalar dependencias

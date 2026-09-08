@@ -1,15 +1,41 @@
 /**
- * ⚡ Code Runner - Execução segura de código JavaScript
- * 
- * - Sandbox isolada (vm)
- * - Timeout de 5 segundos
+ * ⚡ Code Runner - Execução de código JavaScript num processo isolado
+ *
+ * - Corre o código num processo-filho com o AMBIENTE VAZIO (agents/codeSandbox.js)
+ * - Timeout de 5 segundos, com o processo morto à força
  * - Rate limiting por utilizador
- * - Sem acesso a fs, require, process
+ * - Lista de padrões proibidos como primeira barreira
+ *
+ * PORQUE UM PROCESSO À PARTE
+ * O módulo `vm` não é uma fronteira de segurança. Ficou provado que código de
+ * chat conseguia, via `Object.constructor.constructor`, chegar ao `process` do
+ * anfitrião e ler a GROQ_API_KEY. Correr noutro processo sem segredos no
+ * ambiente fecha essa fuga: mesmo que o código escape ao contexto, não há nada
+ * para roubar e o processo é descartável.
  */
 
-const vm = require('vm');
+const path = require('path');
+const os = require('os');
+const { execFileSync } = require('child_process');
 
-const EXEC_TIMEOUT_MS = 5000;
+const EXEC_TIMEOUT_MS = parseInt(process.env.CODE_EXEC_TIMEOUT_MS) || 5000;
+const SANDBOX = path.join(__dirname, 'codeSandbox.js');
+const MAX_OUTPUT = 256 * 1024; // 256KB
+
+/**
+ * Ambiente mínimo para o processo-filho. Nada de segredos. No Windows, o Node
+ * precisa de SystemRoot para arrancar, e é a única variável que passa.
+ */
+function ambienteSeguro() {
+  const env = {};
+  if (process.platform === 'win32') {
+    if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
+    if (process.env.TEMP) env.TEMP = process.env.TEMP;
+  }
+  env.SANDBOX_TIMEOUT_MS = String(EXEC_TIMEOUT_MS);
+  return env;
+}
+
 const MAX_EXEC_PER_MIN = parseInt(process.env.MAX_EXEC_PER_MIN) || 5;
 
 // Rate limiting por utilizador
@@ -133,95 +159,69 @@ function runCode(code, userId = 'anonymous') {
     }
   }
   
-  // Capturar output do console
-  const logs = [];
-  const mockConsole = {
-    log: (...args) => logs.push(args.map(String).join(' ')),
-    warn: (...args) => logs.push('⚠️ ' + args.map(String).join(' ')),
-    error: (...args) => logs.push('❌ ' + args.map(String).join(' ')),
-    info: (...args) => logs.push('ℹ️ ' + args.map(String).join(' '))
-  };
-  
-  // Sandbox com APIs seguras
-  const sandbox = {
-    console: mockConsole,
-    Math,
-    Date,
-    JSON,
-    Array,
-    Object,
-    String,
-    Number,
-    Boolean,
-    RegExp,
-    Map,
-    Set,
-    Promise,
-    setTimeout: undefined,  // Bloqueado
-    setInterval: undefined, // Bloqueado
-    fetch: undefined,       // Bloqueado
-    require: undefined,     // Bloqueado
-    result: undefined
-  };
-  
+  // Executar o código no processo-filho isolado. O código vai pelo stdin,
+  // nunca pela linha de comandos, para não haver problemas de citação nem
+  // limites de tamanho de argumentos.
+  let bruto;
   try {
-    const context = vm.createContext(sandbox);
-    
-    // Wrapper para capturar resultado
-    const wrappedCode = `
-      try {
-        result = (function() {
-          ${code}
-        })();
-      } catch (e) {
-        result = { __error: e.message };
-      }
-    `;
-    
-    const script = new vm.Script(wrappedCode);
-    script.runInContext(context, { timeout: EXEC_TIMEOUT_MS });
-    
-    // Processar resultado
-    let output = '';
-    
-    if (logs.length > 0) {
-      output = logs.join('\n');
-    }
-    
-    if (sandbox.result !== undefined) {
-      if (sandbox.result?.__error) {
-        return {
-          success: false,
-          error: `❌ Erro: ${sandbox.result.__error}`,
-          remaining: rateCheck.remaining
-        };
-      }
-      
-      if (output) {
-        output += '\n';
-      }
-      output += `✅ Resultado: ${JSON.stringify(sandbox.result)}`;
-    }
-    
-    return {
-      success: true,
-      output: output || '✅ Executado (sem output)',
-      remaining: rateCheck.remaining
-    };
-    
+    bruto = execFileSync(process.execPath, [SANDBOX], {
+      input: code,
+      timeout: EXEC_TIMEOUT_MS + 500, // margem sobre o timeout interno do vm
+      maxBuffer: MAX_OUTPUT,
+      env: ambienteSeguro(),
+      cwd: os.tmpdir(),          // longe do código do projecto
+      windowsHide: true,
+      encoding: 'utf8'
+    });
   } catch (err) {
-    let errorMsg = err.message;
-    
-    if (err.message.includes('timeout')) {
-      errorMsg = `Timeout: Código demorou mais de ${EXEC_TIMEOUT_MS/1000}s`;
+    // Morto por tempo excedido (parent) ou pelo backstop do próprio vm.
+    const porTempo = err.killed || err.code === 'ETIMEDOUT' || err.signal === 'SIGTERM'
+      || String(err.message).toLowerCase().includes('timed out');
+    if (porTempo) {
+      return {
+        success: false,
+        error: `❌ Erro: Timeout — código demorou mais de ${EXEC_TIMEOUT_MS / 1000}s`,
+        remaining: rateCheck.remaining
+      };
     }
-    
     return {
       success: false,
-      error: `❌ Erro: ${errorMsg}`,
+      error: `❌ Erro ao executar: ${String(err.message).slice(0, 160)}`,
       remaining: rateCheck.remaining
     };
   }
+
+  // Interpretar o envelope JSON devolvido pelo sandbox.
+  let envelope;
+  try {
+    envelope = JSON.parse(bruto);
+  } catch (e) {
+    return {
+      success: false,
+      error: '❌ Erro: resposta inválida do sandbox',
+      remaining: rateCheck.remaining
+    };
+  }
+
+  if (envelope.error) {
+    return {
+      success: false,
+      error: `❌ Erro: ${envelope.error}`,
+      remaining: rateCheck.remaining
+    };
+  }
+
+  let output = (envelope.logs || []).join('\n');
+  if (envelope.result !== undefined && envelope.result !== null) {
+    if (output) output += '\n';
+    output += `✅ Resultado: ${envelope.result}`;
+  }
+
+  return {
+    success: true,
+    output: output || '✅ Executado (sem output)',
+    remaining: rateCheck.remaining
+  };
 }
 
 module.exports = {

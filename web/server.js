@@ -1,5 +1,5 @@
 /**
- * 🌐 MyAssistBOT Web — Redirecionamento
+ * 🌐 NEXO Web — Redirecionamento
  * 
  * ⚠️  O servidor web foi UNIFICADO com o API server.
  * Tudo funciona numa única porta (PORT, default: 7777).

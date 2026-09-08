@@ -1,5 +1,5 @@
 /**
- * ⚙️ MyAssistBOT Setup Wizard
+ * ⚙️ NEXO Setup Wizard
  * Configuração interativa de API keys e preferências
  */
 
@@ -22,7 +22,7 @@ class SetupWizard {
     this.clear();
     this.banner();
     
-    console.log('\n🔧 Vamos configurar o MyAssistBOT!\n');
+    console.log('\n🔧 Vamos configurar o NEXO!\n');
     console.log('━'.repeat(50));
     
     // Verificar se já existe .env
@@ -139,7 +139,7 @@ class SetupWizard {
   saveEnv() {
     const lines = [
       '# ═══════════════════════════════════════════════════════════',
-      '# 🤖 MyAssistBOT Configuration',
+      '# 🤖 NEXO Configuration',
       '# Gerado pelo Setup Wizard em ' + new Date().toISOString(),
       '# ═══════════════════════════════════════════════════════════',
       '',

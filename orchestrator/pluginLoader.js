@@ -1,5 +1,5 @@
 /**
- * 🔌 Plugin System — Extensões hot-loadable para o MyAssistBOT
+ * 🔌 Plugin System — Extensões hot-loadable para o NEXO
  * 
  * Permite adicionar funcionalidades sem tocar no core.
  * Basta criar um ficheiro .js na pasta plugins/ que exporte:
@@ -234,7 +234,7 @@ function formatPluginList() {
   const plugins = listPlugins();
   
   if (plugins.length === 0) {
-    return `🔌 **Nenhum plugin instalado.**\n\n💡 Cria ficheiros .js na pasta \`plugins/\` para extender o MyAssistBOT.\nVê \`plugins/_example.js\` para um modelo.`;
+    return `🔌 **Nenhum plugin instalado.**\n\n💡 Cria ficheiros .js na pasta \`plugins/\` para extender o NEXO.\nVê \`plugins/_example.js\` para um modelo.`;
   }
 
   let output = `🔌 **Plugins Instalados (${plugins.length}):**\n\n`;

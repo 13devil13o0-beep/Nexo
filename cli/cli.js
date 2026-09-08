@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * 🖥️ MyAssistBOT CLI
+ * 🖥️ NEXO CLI
  * Interface de linha de comandos com suporte i18n
  */
 

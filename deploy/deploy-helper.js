@@ -1,5 +1,5 @@
 /**
- * 🤖 MyAssistBOT — Deploy Helper
+ * 🤖 NEXO — Deploy Helper
  * 
  * Utilitários para deployment na AWS:
  * - Gerar URLs de CloudFormation pré-configurados
@@ -17,7 +17,7 @@ const path = require('path');
 //  CONSTANTES
 // ═══════════════════════════════════════════════════════════
 
-const CFN_TEMPLATE_URL = 'https://raw.githubusercontent.com/NjoYMassaworXp/MyAssist_BOT/main/deploy/aws-cloudformation.yaml';
+const CFN_TEMPLATE_URL = 'https://raw.githubusercontent.com/13devil13o0-beep/Nexo-/main/deploy/aws-cloudformation.yaml';
 
 const REGIONS = {
   'eu-west-1': 'EU (Ireland)',
@@ -50,7 +50,7 @@ const PROVIDER_VALIDATORS = {
  */
 function generateCloudFormationUrl(config = {}) {
   const region = config.region || 'eu-west-1';
-  const stackName = config.stackName || 'MyAssistBOT';
+  const stackName = config.stackName || 'NEXO';
 
   const params = new URLSearchParams();
   params.set('stackName', stackName);
@@ -185,7 +185,7 @@ function testHttp(url, options = {}) {
  */
 function generateEnvContent(config = {}) {
   const lines = [
-    `# 🤖 MyAssistBOT — Configuração`,
+    `# 🤖 NEXO — Configuração`,
     `# Gerado em: ${new Date().toISOString()}`,
     ``,
     `# ── Servidor ──`,
@@ -240,7 +240,7 @@ function writeEnvFile(dir, config = {}) {
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Verifica se um servidor MyAssistBOT remoto está operacional
+ * Verifica se um servidor NEXO remoto está operacional
  * @param {string} serverUrl - URL base do servidor (ex: http://1.2.3.4:7777)
  * @returns {Promise<Object>} Resultado do health check
  */
@@ -317,13 +317,13 @@ function generateInstallScript(config = {}) {
 
   return `#!/bin/bash
 # ═══════════════════════════════════════════════════════════
-# 🤖 MyAssistBOT — Script de Instalação
+# 🤖 NEXO — Script de Instalação
 # Gerado em: ${new Date().toISOString()}
 # ═══════════════════════════════════════════════════════════
 set -euo pipefail
 
 echo "═══════════════════════════════════════════"
-echo "🤖 MyAssistBOT — Instalação Automática"
+echo "🤖 NEXO — Instalação Automática"
 echo "═══════════════════════════════════════════"
 
 # ── Atualizar sistema ──
@@ -345,15 +345,15 @@ echo "✅ Node.js $node_version instalado"
 sudo apt-get install -y git
 
 # ── Clonar repositório ──
-echo "📥 A clonar MyAssistBOT..."
-INSTALL_DIR="\$HOME/myassistbot"
+echo "📥 A clonar NEXO..."
+INSTALL_DIR="\$HOME/nexo"
 
 if [ -d "\$INSTALL_DIR" ]; then
   echo "📁 Diretório já existe, a atualizar..."
   cd "\$INSTALL_DIR"
   git pull origin main
 else
-  git clone https://github.com/NjoYMassaworXp/MyAssist_BOT.git "\$INSTALL_DIR"
+  git clone https://github.com/13devil13o0-beep/Nexo-.git "\$INSTALL_DIR"
   cd "\$INSTALL_DIR"
 fi
 
@@ -376,9 +376,9 @@ echo "📦 A instalar PM2..."
 sudo npm install -g pm2
 
 # ── Iniciar com PM2 ──
-echo "🚀 A iniciar MyAssistBOT..."
-pm2 delete myassistbot 2>/dev/null || true
-pm2 start orchestrator/api-server.js --name myassistbot
+echo "🚀 A iniciar NEXO..."
+pm2 delete nexo 2>/dev/null || true
+pm2 start orchestrator/api-server.js --name nexo
 pm2 save
 sudo env PATH=\$PATH:/usr/bin pm2 startup systemd -u \$USER --hp \$HOME
 
@@ -388,13 +388,13 @@ PORT=${config.port || 7777}
 
 echo ""
 echo "═══════════════════════════════════════════"
-echo "✅ MyAssistBOT instalado com sucesso!"
+echo "✅ NEXO instalado com sucesso!"
 echo "═══════════════════════════════════════════"
 echo "🌐 URL: http://\$PUBLIC_IP:\$PORT"
 echo "📁 Dir: \$INSTALL_DIR"
-echo "📋 Logs: pm2 logs myassistbot"
-echo "🔄 Restart: pm2 restart myassistbot"
-echo "⏹️  Stop: pm2 stop myassistbot"
+echo "📋 Logs: pm2 logs nexo"
+echo "🔄 Restart: pm2 restart nexo"
+echo "⏹️  Stop: pm2 stop nexo"
 echo "═══════════════════════════════════════════"
 `;
 }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MyAssistBOT — Setup do Servidor AWS</title>
+  <title>NEXO — Setup do Servidor AWS</title>
   <style>
     :root {
       --bg: #0a0a0f;
@@ -559,7 +559,7 @@
 
   <!-- ═══ HEADER ═══ -->
   <div class="setup-header">
-    <h1>🤖 MyAssistBOT — Setup do Servidor</h1>
+    <h1>🤖 NEXO — Setup do Servidor</h1>
     <p>Guia passo-a-passo para teres o teu próprio assistente IA na cloud</p>
   </div>
 
@@ -602,7 +602,7 @@
         <span class="icon">💡</span>
         <div class="info-text">
           <strong>AWS Free Tier</strong> — A AWS oferece <strong>12 meses grátis</strong> com uma instância t3.micro
-          (1 vCPU, 1GB RAM). Mais que suficiente para o MyAssistBOT servir 1-5 utilizadores em simultâneo.
+          (1 vCPU, 1GB RAM). Mais que suficiente para o NEXO servir 1-5 utilizadores em simultâneo.
         </div>
       </div>
 
@@ -673,12 +673,12 @@
     <!-- ═══ STEP 2: OBTER API KEYS ═══ -->
     <div class="wizard-step" id="step2">
       <h2>🔑 Passo 2: API Keys de IA</h2>
-      <p class="subtitle">Regista-te nos serviços de IA gratuitos para alimentar o MyAssistBOT</p>
+      <p class="subtitle">Regista-te nos serviços de IA gratuitos para alimentar o NEXO</p>
 
       <div class="info-card">
         <span class="icon">🧠</span>
         <div class="info-text">
-          O MyAssistBOT usa <strong>IA multi-provider</strong> com fallback automático. Se um falha, tenta o seguinte.
+          O NEXO usa <strong>IA multi-provider</strong> com fallback automático. Se um falha, tenta o seguinte.
           Configura pelo menos <strong>1 provider</strong> (recomendamos Groq).
         </div>
       </div>
@@ -834,7 +834,7 @@
           <span class="icon">⚡</span>
           <div class="info-text">
             <strong>Deploy com 1 click</strong> — O CloudFormation cria automaticamente o servidor, 
-            configura segurança, instala o MyAssistBOT e inicia tudo. Demora ~3-5 minutos.
+            configura segurança, instala o NEXO e inicia tudo. Demora ~3-5 minutos.
           </div>
         </div>
 
@@ -876,7 +876,7 @@
           </div>
           <ul>
             <li>Vai ao separador <strong>"Outputs"</strong> do stack</li>
-            <li>Copia o valor de <strong>"BotURL"</strong> — é o endereço do teu MyAssistBOT!</li>
+            <li>Copia o valor de <strong>"BotURL"</strong> — é o endereço do teu NEXO!</li>
           </ul>
         </div>
       </div>
@@ -898,7 +898,7 @@
           </div>
           <ul>
             <li>Na Console AWS, vai a <strong>EC2 → Launch Instance</strong></li>
-            <li>Nome: <strong>MyAssistBOT</strong></li>
+            <li>Nome: <strong>NEXO</strong></li>
             <li>AMI: <strong>Ubuntu 22.04 LTS</strong></li>
             <li>Tipo: <strong>t3.micro</strong> (Free Tier)</li>
             <li>Key Pair: <strong>Cria novo</strong> (descarrega o ficheiro .pem)</li>
@@ -921,7 +921,7 @@ ssh -i "tua-key.pem" ubuntu@IP_DA_INSTANCIA
         <div class="instruction">
           <div class="instruction-header">
             <span class="instruction-number">3</span>
-            Instalar MyAssistBOT
+            Instalar NEXO
           </div>
           <p>Cola este script completo no terminal SSH:</p>
           <div class="code-block" id="manualScript">
@@ -947,9 +947,9 @@ ssh -i "tua-key.pem" ubuntu@IP_DA_INSTANCIA
             Clonar e configurar
           </div>
           <div class="code-block">
-git clone https://github.com/NjoYMassaworXp/MyAssist_BOT.git<br>
-cd MyAssist_BOT
-            <button class="copy-btn" onclick="copyText('git clone https://github.com/NjoYMassaworXp/MyAssist_BOT.git && cd MyAssist_BOT')">📋</button>
+git clone https://github.com/13devil13o0-beep/Nexo-.git<br>
+cd Nexo-
+            <button class="copy-btn" onclick="copyText('git clone https://github.com/13devil13o0-beep/Nexo-.git && cd Nexo-')">📋</button>
           </div>
         </div>
 
@@ -985,7 +985,7 @@ docker-compose up -d
     <!-- ═══ STEP 5: VERIFICAR ═══ -->
     <div class="wizard-step" id="step5">
       <h2>✅ Passo 5: Verificação</h2>
-      <p class="subtitle">Verifica se o teu MyAssistBOT está a funcionar</p>
+      <p class="subtitle">Verifica se o teu NEXO está a funcionar</p>
 
       <div class="form-group">
         <label>🌐 URL do teu servidor</label>
@@ -1027,14 +1027,14 @@ docker-compose up -d
           <div class="info-card success">
             <span class="icon">🎉</span>
             <div class="info-text">
-              <strong>MyAssistBOT está operacional!</strong><br>
+              <strong>NEXO está operacional!</strong><br>
               O teu assistente IA pessoal está a correr no teu próprio servidor.
               Acede pelo browser no URL acima ou configura os bots Telegram/Discord.
             </div>
           </div>
 
           <div style="text-align:center; margin-top:16px;">
-            <button class="btn btn-success" onclick="openBotUrl()">🤖 Abrir MyAssistBOT</button>
+            <button class="btn btn-success" onclick="openBotUrl()">🤖 Abrir NEXO</button>
           </div>
         </div>
 
@@ -1052,7 +1052,7 @@ docker-compose up -d
 
       <div class="btn-row">
         <button class="btn btn-secondary" onclick="goToStep(4)">← Anterior</button>
-        <a href="/" class="btn btn-success">🏠 Ir para o MyAssistBOT</a>
+        <a href="/" class="btn btn-success">🏠 Ir para o NEXO</a>
       </div>
     </div>
 
@@ -1113,7 +1113,7 @@ docker-compose up -d
 
     function generateEnvContent() {
       const cfg = getConfig();
-      return `# 🤖 MyAssistBOT - Configuração (gerada pelo setup wizard)
+      return `# 🤖 NEXO - Configuração (gerada pelo setup wizard)
 # Data: ${new Date().toISOString().split('T')[0]}
 
 # ── Porta do Servidor ──
@@ -1146,7 +1146,7 @@ NODE_ENV=production
       const cfg = getConfig();
 
       // CloudFormation URL
-      const cfnTemplateUrl = 'https://raw.githubusercontent.com/NjoYMassaworXp/MyAssist_BOT/main/deploy/aws-cloudformation.yaml';
+      const cfnTemplateUrl = 'https://raw.githubusercontent.com/13devil13o0-beep/Nexo-/main/deploy/aws-cloudformation.yaml';
       const params = [
         `InstanceType=${cfg.instanceType}`,
         `BotPort=${cfg.port}`,
@@ -1171,18 +1171,18 @@ NODE_ENV=production
       // Script de instalação manual
       const envContent = generateEnvContent().replace(/\n/g, '\\n').replace(/'/g, "\\'");
       const manualScript = `#!/bin/bash
-# MyAssistBOT — Instalação Manual
+# NEXO — Instalação Manual
 set -e
 
-echo "🤖 A instalar MyAssistBOT..."
+echo "🤖 A instalar NEXO..."
 
 # Instalar Node.js 20
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash -
 sudo apt-get install -y nodejs git
 
 # Clonar
-git clone https://github.com/NjoYMassaworXp/MyAssist_BOT.git ~/myassistbot
-cd ~/myassistbot
+git clone https://github.com/13devil13o0-beep/Nexo-.git ~/nexo
+cd ~/nexo
 
 # Instalar dependências
 npm install --production
@@ -1195,11 +1195,11 @@ ${generateEnvContent()}EOF
 sudo npm install -g pm2
 
 # Iniciar
-pm2 start orchestrator/api-server.js --name myassistbot
+pm2 start orchestrator/api-server.js --name nexo
 pm2 save
 pm2 startup
 
-echo "✅ MyAssistBOT a correr na porta ${cfg.port}"
+echo "✅ NEXO a correr na porta ${cfg.port}"
 echo "🌐 Acede em: http://$(curl -s ifconfig.me):${cfg.port}"`;
 
       document.getElementById('manualScript').innerHTML = `

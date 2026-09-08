@@ -52,7 +52,7 @@ async function createPDF(topic, folder = null) {
     // Header
     doc.fontSize(24)
        .font('Helvetica-Bold')
-       .text('MyAssistBOT - Documento Gerado', { align: 'center' });
+       .text('NEXO - Documento Gerado', { align: 'center' });
     
     doc.moveDown();
     doc.fontSize(14)
@@ -88,7 +88,7 @@ async function createPDF(topic, folder = null) {
     doc.fontSize(9)
        .fillColor('#999')
        .text('───────────────────────────────────────', { align: 'center' });
-    doc.text('Gerado por MyAssistBOT - Assistente IA', { align: 'center' });
+    doc.text('Gerado por NEXO - Assistente IA', { align: 'center' });
 
     doc.end();
 
@@ -116,7 +116,7 @@ gerado por inteligência artificial.
 
 ───────────────────────────────────────
 Gerado em: ${new Date().toLocaleString('pt-PT')}
-Por: MyAssistBOT`;
+Por: NEXO`;
 }
 
 /**

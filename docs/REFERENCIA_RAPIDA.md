@@ -1,4 +1,4 @@
-# 🤖 MyAssistBOT - Referência Rápida
+# 🤖 NEXO - Referência Rápida
 
 ## Comandos de Início
 
@@ -69,4 +69,12 @@ GET  /api/stats           - Estatísticas
 - **5 execuções código/minuto**
 
 ---
-*MyAssistBOT v2.0*
+
+👤 "Abre o Chrome e vai a github.com"          → Abre browser, digita URL, carrega Enter
+👤 "Cria uma app de tarefas em React"           → Planifica, gera código, cria 6+ ficheiros
+👤 "Preço do Bitcoin hoje"                      → Pesquisa web em tempo real + resumo IA
+👤 "Cria PDF sobre energia solar"               → Documento A4 profissional gerado por IA
+👤 "Tira screenshot e lista os processos"       → Captura ecrã + lista processos do sistema
+👤 "Executar: [1,2,3].map(x => x * 10)"        → Executa código JS em sandbox seguro → [10,20,30]
+
+*NEXO v2.0*

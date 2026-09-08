@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * 🧪 MyAssistBOT - Suite de Testes Completa
+ * 🧪 NEXO - Suite de Testes Completa
  * 
  * Executa: npm test  (ou node test/test-all.js)
  * 
@@ -1394,6 +1394,637 @@ describe('🌍 i18n Module', () => {
     assertEqual(result.intent, 'list_languages', 'Deve detectar list_languages');
   });
 });
+
+
+// ═══════════════════════════════════════════════════════════
+// ADAPTADOR ANTHROPIC — tradução entre o formato do NEXO e o da Anthropic
+// ═══════════════════════════════════════════════════════════
+
+describe('🟠 Adaptador Anthropic', () => {
+  const anthropic = require('../nexo/adapters/anthropic');
+
+  test('ferramentas passam de parameters para input_schema', () => {
+    const [f] = anthropic.ferramentasParaAnthropic([{
+      type: 'function',
+      function: { name: 'somar', description: 'soma', parameters: { type: 'object', properties: { a: { type: 'number' } } } }
+    }]);
+    assertEqual(f.name, 'somar');
+    assert(f.input_schema, 'deve ter input_schema');
+    assert(!f.parameters, 'não deve manter parameters');
+    assertEqual(f.input_schema.properties.a.type, 'number');
+  });
+
+  test('o prompt de sistema sai das mensagens para parâmetro de topo', () => {
+    const r = anthropic.mensagensParaAnthropic([
+      { role: 'system', content: 'És o NEXO.' },
+      { role: 'user', content: 'olá' }
+    ]);
+    assertEqual(r.system, 'És o NEXO.');
+    assertEqual(r.mensagens.length, 1);
+    assertEqual(r.mensagens[0].role, 'user');
+  });
+
+  test('assistente com tool_calls vira blocos tool_use', () => {
+    const r = anthropic.mensagensParaAnthropic([
+      { role: 'user', content: 'quanto é 2+2' },
+      { role: 'assistant', content: null, tool_calls: [
+        { id: 'toolu_1', function: { name: 'executar_codigo', arguments: '{"codigo":"2+2"}' } }
+      ] }
+    ]);
+    const assistente = r.mensagens[1];
+    assertEqual(assistente.role, 'assistant');
+    assertEqual(assistente.content[0].type, 'tool_use');
+    assertEqual(assistente.content[0].id, 'toolu_1');
+    assertEqual(assistente.content[0].input.codigo, '2+2');
+  });
+
+  test('resultados de ferramentas juntam-se numa só mensagem de utilizador', () => {
+    const r = anthropic.mensagensParaAnthropic([
+      { role: 'user', content: 'faz duas coisas' },
+      { role: 'assistant', content: null, tool_calls: [
+        { id: 'a', function: { name: 'x', arguments: '{}' } },
+        { id: 'b', function: { name: 'y', arguments: '{}' } }
+      ] },
+      { role: 'tool', tool_call_id: 'a', name: 'x', content: 'resultado A' },
+      { role: 'tool', tool_call_id: 'b', name: 'y', content: 'resultado B' }
+    ]);
+    const ultima = r.mensagens[r.mensagens.length - 1];
+    assertEqual(ultima.role, 'user');
+    assertEqual(ultima.content.length, 2);
+    assertEqual(ultima.content[0].type, 'tool_result');
+    assertEqual(ultima.content[0].tool_use_id, 'a');
+    assertEqual(ultima.content[1].tool_use_id, 'b');
+  });
+
+  test('resposta com tool_use volta na forma comum do NEXO', () => {
+    const r = anthropic.respostaParaNexo({
+      model: 'claude-opus-5',
+      stop_reason: 'tool_use',
+      content: [
+        { type: 'thinking', thinking: '' },
+        { type: 'text', text: 'Vou calcular.' },
+        { type: 'tool_use', id: 'toolu_9', name: 'executar_codigo', input: { codigo: '1+1' } }
+      ],
+      usage: { input_tokens: 10, output_tokens: 5 }
+    }, 'claude-opus-5');
+
+    assertEqual(r.text, 'Vou calcular.');
+    assertEqual(r.toolCalls.length, 1);
+    assertEqual(r.toolCalls[0].id, 'toolu_9');
+    assertEqual(r.toolCalls[0].function.name, 'executar_codigo');
+    assertEqual(JSON.parse(r.toolCalls[0].function.arguments).codigo, '1+1');
+    assertEqual(r.stopReason, 'tool_use');
+  });
+
+  test('blocos de raciocínio são ignorados no texto', () => {
+    const r = anthropic.respostaParaNexo({
+      content: [{ type: 'thinking', thinking: 'nao mostrar' }, { type: 'text', text: 'olá' }]
+    }, 'm');
+    assertEqual(r.text, 'olá');
+  });
+
+  test('resposta sem ferramentas não traz toolCalls', () => {
+    const r = anthropic.respostaParaNexo({ content: [{ type: 'text', text: 'resposta simples' }] }, 'm');
+    assertEqual(r.toolCalls, null);
+    assert(!r.raw, 'sem chamadas não precisa de turno cru');
+  });
+
+  test('ida e volta preserva o identificador da chamada', () => {
+    const resposta = anthropic.respostaParaNexo({
+      content: [{ type: 'tool_use', id: 'toolu_zz', name: 'f', input: {} }]
+    }, 'm');
+    const convertido = anthropic.mensagensParaAnthropic([
+      { role: 'user', content: 'x' },
+      resposta.raw,
+      { role: 'tool', tool_call_id: 'toolu_zz', content: 'ok' }
+    ]);
+    assertEqual(convertido.mensagens[1].content[0].id, 'toolu_zz');
+    assertEqual(convertido.mensagens[2].content[0].tool_use_id, 'toolu_zz');
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// DETECÇÃO DE DISPOSITIVO — que perfil de arranque cada máquina justifica
+// ═══════════════════════════════════════════════════════════
+
+describe('🔍 Detecção de Dispositivo', () => {
+  const dispositivo = require('../orchestrator/dispositivo');
+
+  const GB = 1024 ** 3;
+
+  /** Uma máquina fingida. Por omissão, um PC de secretária capaz. */
+  function maquina(extras = {}) {
+    return {
+      env: {},
+      plataforma: 'win32',
+      memoriaTotal: 16 * GB,
+      memoriaLivre: 8 * GB,
+      nucleos: 8,
+      terminal: true,
+      lerFicheiro: () => null,
+      ...extras
+    };
+  }
+
+  const perfilDe = (extras) => dispositivo.detectar(maquina(extras)).perfil;
+
+  test('PC com ecrã e memória folgada → completo', () => {
+    assertEqual(perfilDe(), 'completo');
+  });
+
+  test('Linux sem DISPLAY mas com terminal → consola', () => {
+    assertEqual(perfilDe({ plataforma: 'linux', env: {}, terminal: true }), 'consola');
+  });
+
+  test('Linux com DISPLAY → completo', () => {
+    assertEqual(perfilDe({ plataforma: 'linux', env: { DISPLAY: ':0' } }), 'completo');
+  });
+
+  test('sem gráficos e sem terminal → serviço', () => {
+    assertEqual(perfilDe({ plataforma: 'linux', env: {}, terminal: false }), 'servico');
+  });
+
+  test('sessão SSH não abre janela na máquina errada', () => {
+    assertEqual(perfilDe({ env: { SSH_CONNECTION: '10.0.0.2 22' } }), 'consola');
+  });
+
+  test('dentro de um contentor → serviço', () => {
+    assertEqual(perfilDe({
+      plataforma: 'linux',
+      env: { DISPLAY: ':0' },
+      lerFicheiro: (c) => (c === '/.dockerenv' ? '' : null)
+    }), 'servico');
+  });
+
+  test('cgroup do Kubernetes também conta como contentor', () => {
+    assertEqual(perfilDe({
+      plataforma: 'linux',
+      env: { DISPLAY: ':0' },
+      lerFicheiro: (c) => (c === '/proc/1/cgroup' ? '0::/kubepods/besteffort/pod123' : null)
+    }), 'servico');
+  });
+
+  test('máquina com 2 GB de memória → leve', () => {
+    assertEqual(perfilDe({ memoriaTotal: 2 * GB }), 'leve');
+  });
+
+  test('um único núcleo → leve', () => {
+    assertEqual(perfilDe({ nucleos: 1 }), 'leve');
+  });
+
+  test('CI nunca abre janela', () => {
+    assertEqual(perfilDe({ env: { CI: 'true' } }), 'servico');
+  });
+
+  test('a decisão vem acompanhada do motivo', () => {
+    const d = dispositivo.detectar(maquina({ memoriaTotal: 2 * GB }));
+    assertIncludes(d.motivo, 'memória');
+    assertEqual(d.origem, 'deteccao');
+  });
+
+  // ── Precedência ──
+
+  test('a linha de comandos ganha à detecção', () => {
+    const d = dispositivo.resolver({ argv: ['--modo=servico'], fontes: maquina() });
+    assertEqual(d.perfil, 'servico');
+    assertEqual(d.origem, 'argumento');
+  });
+
+  test('--modo servico (com espaço) também é lido', () => {
+    assertEqual(dispositivo.resolver({ argv: ['--modo', 'leve'], fontes: maquina() }).perfil, 'leve');
+  });
+
+  test('NEXO_MODO ganha às definições guardadas', () => {
+    const d = dispositivo.resolver({
+      argv: [],
+      env: { NEXO_MODO: 'consola' },
+      definicoes: { modo: 'leve' },
+      fontes: maquina()
+    });
+    assertEqual(d.perfil, 'consola');
+    assertEqual(d.origem, 'ambiente');
+  });
+
+  test('as definições guardadas ganham à detecção', () => {
+    const d = dispositivo.resolver({ argv: [], definicoes: { modo: 'servico' }, fontes: maquina() });
+    assertEqual(d.perfil, 'servico');
+    assertEqual(d.origem, 'definicoes');
+  });
+
+  test('modo guardado como "auto" deixa a detecção decidir', () => {
+    const d = dispositivo.resolver({ argv: [], definicoes: { modo: 'auto' }, fontes: maquina() });
+    assertEqual(d.perfil, 'completo');
+    assertEqual(d.origem, 'deteccao');
+  });
+
+  test('um modo inválido é ignorado em vez de partir o arranque', () => {
+    const d = dispositivo.resolver({ argv: ['--modo=disparate'], fontes: maquina() });
+    assertEqual(d.perfil, 'completo');
+    assertEqual(d.origem, 'deteccao');
+  });
+
+  test('o relatório mostra o perfil escolhido', () => {
+    const texto = dispositivo.formatarRelatorio(dispositivo.detectar(maquina()));
+    assertIncludes(texto, 'COMPLETO');
+    assertIncludes(texto, 'núcleos');
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// NAVEGAÇÃO E MISSÃO — decisões de missão, nunca de voo
+// ═══════════════════════════════════════════════════════════
+
+describe('🌍 Geometria de navegação', () => {
+  const geo = require('../nexo/navegacao/geo');
+
+  const BASE = { lat: 40.150, lng: -8.650, alt: 60 };
+  const LONGE = { lat: 40.180, lng: -8.680, alt: 60 };
+
+  test('distância entre dois pontos conhecidos', () => {
+    const d = geo.distancia(BASE, LONGE);
+    assert(d > 4100 && d < 4300, `esperava ~4200 m, deu ${Math.round(d)}`);
+  });
+
+  test('distância de um ponto a si próprio é zero', () => {
+    assertEqual(Math.round(geo.distancia(BASE, BASE)), 0);
+  });
+
+  test('rumo para norte é 0 e para este é 90', () => {
+    const norte = geo.projectar(BASE, 0, 1000);
+    const este = geo.projectar(BASE, 90, 1000);
+    assert(Math.abs(geo.rumo(BASE, norte)) < 1, 'norte deve dar rumo ~0');
+    assert(Math.abs(geo.rumo(BASE, este) - 90) < 1, 'este deve dar rumo ~90');
+  });
+
+  test('projectar e medir dá a distância pedida', () => {
+    const p = geo.projectar(BASE, 45, 2500);
+    assert(Math.abs(geo.distancia(BASE, p) - 2500) < 5, 'ida e volta deve fechar');
+  });
+
+  test('interpolar a meio fica a meia distância', () => {
+    const meio = geo.interpolar(BASE, LONGE, 0.5);
+    const d = geo.distancia(BASE, meio);
+    const total = geo.distancia(BASE, LONGE);
+    assert(Math.abs(d - total / 2) < 10, 'o meio deve estar a metade');
+  });
+
+  test('ponto dentro e fora de zona circular', () => {
+    const zona = { centro: { lat: 40.166, lng: -8.667 }, raioM: 400 };
+    assert(geo.dentroDaZona({ lat: 40.166, lng: -8.667 }, zona), 'o centro está dentro');
+    assert(!geo.dentroDaZona(BASE, zona), 'a base está fora');
+  });
+
+  test('ponto dentro de polígono', () => {
+    const zona = { poligono: [
+      { lat: 40.16, lng: -8.67 }, { lat: 40.17, lng: -8.67 },
+      { lat: 40.17, lng: -8.66 }, { lat: 40.16, lng: -8.66 }
+    ]};
+    assert(geo.dentroDaZona({ lat: 40.165, lng: -8.665 }, zona), 'o meio está dentro');
+    assert(!geo.dentroDaZona({ lat: 40.20, lng: -8.60 }, zona), 'longe está fora');
+  });
+
+  test('segmento que atravessa a zona é detectado', () => {
+    const zona = { centro: { lat: 40.165, lng: -8.665 }, raioM: 400 };
+    assert(geo.segmentoAtravessaZona(BASE, LONGE, zona), 'a linha recta passa por cima');
+  });
+
+  test('o ponto de contorno fica fora da zona', () => {
+    const zona = { nome: 'z', centro: { lat: 40.165, lng: -8.665 }, raioM: 400 };
+    const contorno = geo.pontoDeContorno(BASE, LONGE, zona, 50);
+    assert(contorno, 'deve haver contorno');
+    assert(!geo.dentroDaZona(contorno, zona), 'o contorno não pode ficar dentro');
+  });
+});
+
+
+describe('📍 Planeador de rota', () => {
+  const planeador = require('../nexo/navegacao/planeador');
+  const geo = require('../nexo/navegacao/geo');
+
+  const BASE = { lat: 40.150, lng: -8.650, alt: 60 };
+  const DESTINO = { lat: 40.180, lng: -8.680, alt: 60 };
+  const CAPACIDADES = { velocidadeCruzeiroMs: 12, consumoPorSegundo: 0.09, autonomiaS: 900 };
+
+  test('rota directa sem zonas é viável', () => {
+    const r = planeador.planear(BASE, DESTINO, {}, CAPACIDADES);
+    assert(r.viavel, 'devia ser viável');
+    assertEqual(r.zonasContornadas.length, 0);
+    assert(r.pontos.length > 2, 'deve ter pontos de verificação');
+  });
+
+  test('a rota contorna a zona proibida em vez de a atravessar', () => {
+    const zona = { nome: 'aeródromo', centro: { lat: 40.165, lng: -8.665 }, raioM: 400 };
+    const r = planeador.planear(BASE, DESTINO, { zonasProibidas: [zona] }, CAPACIDADES);
+
+    assert(r.viavel, 'devia haver contorno');
+    assertEqual(r.zonasContornadas.length, 1);
+
+    const dentro = r.pontos.filter(p => geo.dentroDaZona(p, zona));
+    assertEqual(dentro.length, 0, 'nenhum ponto da rota pode cair dentro da zona');
+  });
+
+  test('contornar é mais longo do que a linha recta', () => {
+    const zona = { nome: 'z', centro: { lat: 40.165, lng: -8.665 }, raioM: 400 };
+    const directa = planeador.planear(BASE, DESTINO, {}, CAPACIDADES);
+    const desviada = planeador.planear(BASE, DESTINO, { zonasProibidas: [zona] }, CAPACIDADES);
+    assert(desviada.distanciaM > directa.distanciaM, 'o desvio custa distância');
+  });
+
+  test('destino dentro de zona proibida não tem rota', () => {
+    const zona = { nome: 'restrição', centro: { ...DESTINO }, raioM: 500 };
+    const r = planeador.planear(BASE, DESTINO, { zonasProibidas: [zona] }, CAPACIDADES);
+    assert(!r.viavel, 'não pode haver rota para dentro de zona proibida');
+    assertIncludes(r.motivo, 'destino dentro de zona proibida');
+  });
+
+  test('destino além do raio permitido é recusado', () => {
+    const r = planeador.planear(BASE, DESTINO, { raioMaxM: 1000 }, CAPACIDADES);
+    assert(!r.viavel, 'fora do raio devia ser recusado');
+    assertIncludes(r.motivo, 'raio');
+  });
+
+  test('energia desconhecida é null, nunca zero', () => {
+    assertEqual(planeador.energiaNecessaria(1000, {}), null);
+  });
+
+  test('energia estimada a partir do consumo declarado', () => {
+    // 1200 m a 12 m/s = 100 s; 100 s × 0,09 %/s = 9 %
+    const e = planeador.energiaNecessaria(1200, CAPACIDADES);
+    assert(Math.abs(e - 9) < 0.5, `esperava ~9%, deu ${e}`);
+  });
+
+  test('alternativa com propósito diferente não é viável', () => {
+    const missao = { objetivo: { proposito: 'inspecionar' }, inicio: BASE, regras: {} };
+    const [alt] = planeador.avaliarAlternativas(BASE, [
+      { nome: 'Depósito', localizacao: { lat: 40.16, lng: -8.655 }, proposito: 'entregar' }
+    ], missao, CAPACIDADES, 100);
+
+    assert(!alt.viavel, 'propósito diferente não serve de plano B');
+    assertIncludes(alt.motivo, 'propósito diferente');
+  });
+
+  test('alternativa que não cabe na bateria não é viável', () => {
+    const missao = { objetivo: { proposito: 'inspecionar' }, inicio: BASE, regras: {} };
+    const [alt] = planeador.avaliarAlternativas(BASE, [
+      { nome: 'Longe', localizacao: DESTINO, proposito: 'inspecionar' }
+    ], missao, CAPACIDADES, 15);
+
+    assert(!alt.viavel, '15% de bateria não chega para ir e voltar');
+    assertIncludes(alt.motivo, 'não cabe na bateria');
+  });
+});
+
+
+describe('🧠 Cérebro de missão', () => {
+  const cerebro = require('../nexo/navegacao/cerebro');
+  const { ACCOES, URGENCIA, missao: criarMissao } = require('../nexo/navegacao/contrato');
+
+  const BASE = { lat: 40.150, lng: -8.650, alt: 60 };
+  const DESTINO = { lat: 40.180, lng: -8.680, alt: 60 };
+  const CAPACIDADES = { velocidadeCruzeiroMs: 12, consumoPorSegundo: 0.09, autonomiaS: 900, altitudeMaxM: 120 };
+
+  const missaoBase = (extras = {}) => criarMissao({
+    objetivo: { proposito: 'inspecionar', alvo: 'zona-sul' },
+    inicio: BASE,
+    destino: DESTINO,
+    autonomia: 'autonomo',
+    ...extras
+  });
+
+  const estadoEm = (posicao, bateria = 100, extras = {}) => ({
+    posicao, bateria, aMover: true, obstaculos: [], ...extras
+  });
+
+  const contexto = { capacidades: CAPACIDADES };
+
+  test('caminho livre e bateria cheia → continuar', () => {
+    const d = cerebro.avaliar(estadoEm(BASE), missaoBase(), contexto);
+    assertEqual(d.accao, ACCOES.CONTINUAR);
+  });
+
+  test('bateria crítica → parar onde está', () => {
+    const d = cerebro.avaliar(estadoEm(BASE, 5), missaoBase(), contexto);
+    assertEqual(d.accao, ACCOES.PARAR);
+    assertEqual(d.urgencia, URGENCIA.SEGURANCA);
+  });
+
+  test('bateria abaixo da reserva → regressar', () => {
+    const d = cerebro.avaliar(estadoEm(BASE, 20), missaoBase(), contexto);
+    assertEqual(d.accao, ACCOES.REGRESSAR);
+    assertEqual(d.urgencia, URGENCIA.SEGURANCA);
+  });
+
+  test('decisões de segurança nunca pedem confirmação', () => {
+    const d = cerebro.avaliar(estadoEm(BASE, 5), missaoBase({ autonomia: 'supervisionado' }), contexto);
+    assertEqual(d.precisaConfirmacao, false);
+  });
+
+  test('chegou ao destino → concluir', () => {
+    const d = cerebro.avaliar(estadoEm({ ...DESTINO }), missaoBase(), contexto);
+    assertEqual(d.accao, ACCOES.CONCLUIR);
+  });
+
+  test('acima da altitude máxima → parar', () => {
+    const d = cerebro.avaliar(estadoEm({ ...BASE, alt: 200 }), missaoBase(), contexto);
+    assertEqual(d.accao, ACCOES.PARAR);
+    assertIncludes(d.motivo, 'altitude');
+  });
+
+  test('sem resposta do aparelho → regressar', () => {
+    const d = cerebro.avaliar(estadoEm(BASE), missaoBase(), { ...contexto, ciclosSemResposta: 3 });
+    assertEqual(d.accao, ACCOES.REGRESSAR);
+    assertEqual(d.urgencia, URGENCIA.SEGURANCA);
+  });
+
+  test('destino bloqueado → muda para alternativa do mesmo propósito', () => {
+    const m = missaoBase({
+      alternativas: [
+        { nome: 'Observação B', localizacao: { lat: 40.169, lng: -8.660, alt: 60 }, proposito: 'inspecionar' }
+      ],
+      regras: { zonasProibidas: [{ nome: 'restrição', centro: { ...DESTINO }, raioM: 500 }] }
+    });
+
+    const d = cerebro.avaliar(estadoEm(BASE), m, contexto);
+    assertEqual(d.accao, ACCOES.MUDAR_DESTINO);
+    assertIncludes(d.motivo, 'Observação B');
+  });
+
+  test('só há alternativas de outro propósito → regressa em vez de inventar', () => {
+    const m = missaoBase({
+      alternativas: [
+        { nome: 'Depósito', localizacao: { lat: 40.160, lng: -8.655, alt: 60 }, proposito: 'entregar' }
+      ],
+      regras: { zonasProibidas: [{ nome: 'restrição', centro: { ...DESTINO }, raioM: 500 }] }
+    });
+
+    const d = cerebro.avaliar(estadoEm(BASE), m, contexto);
+    assertEqual(d.accao, ACCOES.REGRESSAR);
+    assertIncludes(d.motivo, 'nenhuma alternativa viável');
+  });
+
+  test('em modo supervisionado, trocar de destino espera por uma pessoa', () => {
+    const m = missaoBase({
+      autonomia: 'supervisionado',
+      alternativas: [
+        { nome: 'Observação B', localizacao: { lat: 40.169, lng: -8.660, alt: 60 }, proposito: 'inspecionar' }
+      ],
+      regras: { zonasProibidas: [{ nome: 'restrição', centro: { ...DESTINO }, raioM: 500 }] }
+    });
+
+    const d = cerebro.avaliar(estadoEm(BASE), m, contexto);
+    assertEqual(d.accao, ACCOES.MUDAR_DESTINO);
+    assertEqual(d.precisaConfirmacao, true);
+  });
+
+  test('dentro de zona proibida → desviar com urgência de segurança', () => {
+    const m = missaoBase({
+      regras: { zonasProibidas: [{ nome: 'zona', centro: { lat: 40.155, lng: -8.655 }, raioM: 400 }] }
+    });
+
+    const d = cerebro.avaliar(estadoEm({ lat: 40.155, lng: -8.655, alt: 60 }), m, contexto);
+    assertEqual(d.accao, ACCOES.DESVIAR);
+    assertEqual(d.urgencia, URGENCIA.SEGURANCA);
+  });
+
+  test('toda a decisão é rastreável: origem "regra"', () => {
+    const d = cerebro.avaliar(estadoEm(BASE), missaoBase(), contexto);
+    assertEqual(d.origem, 'regra');
+  });
+});
+
+
+describe('🎮 Dispositivo simulado e portão de segurança', () => {
+  const { criarSimulado } = require('../nexo/navegacao/dispositivos/simulado');
+  const { ControladorDeMissao } = require('../nexo/navegacao/controlador');
+  const { validarDispositivo, dispositivoDeNavegacao } = require('../nexo/navegacao/contrato');
+  const geo = require('../nexo/navegacao/geo');
+
+  const BASE = { lat: 40.150, lng: -8.650, alt: 60 };
+  const DESTINO = { lat: 40.180, lng: -8.680, alt: 60 };
+
+  test('o simulado cumpre o contrato e declara-se simulado', () => {
+    const d = criarSimulado({ posicao: BASE });
+    assert(validarDispositivo(d).valido, 'devia ser válido');
+    assertEqual(d.simulado, true);
+  });
+
+  test('um dispositivo que não se declara é tratado como físico', () => {
+    const d = dispositivoDeNavegacao({ id: 'x' });
+    assertEqual(d.simulado, false, 'omitir "simulado" nunca pode significar simulado');
+  });
+
+  test('o simulado aproxima-se do alvo com o tempo', () => {
+    const d = criarSimulado({ posicao: BASE, velocidadeMs: 12 });
+    d.interno.ligado = true;
+    d.interno.alvo = { ...DESTINO };
+    d.interno.aMover = true;
+
+    const antes = geo.distancia(d.interno.posicao, DESTINO);
+    d.avancarTempo(60);
+    const depois = geo.distancia(d.interno.posicao, DESTINO);
+
+    assert(depois < antes, 'devia ter-se aproximado');
+    assert(Math.abs((antes - depois) - 720) < 40, `60 s a 12 m/s ≈ 720 m, deu ${Math.round(antes - depois)}`);
+  });
+
+  test('a bateria desce com o tempo', () => {
+    const d = criarSimulado({ posicao: BASE, consumoPorSegundo: 0.1, bateria: 100 });
+    d.interno.ligado = true;
+    d.interno.aMover = true;
+    d.avancarTempo(100);
+    assert(Math.abs(d.interno.bateria - 90) < 1, `esperava ~90%, deu ${d.interno.bateria.toFixed(1)}`);
+  });
+
+  test('um dispositivo físico é recusado sem autorização explícita', () => {
+    const fisico = dispositivoDeNavegacao({
+      id: 'drone-real',
+      nome: 'Drone real',
+      simulado: false,
+      ligar: async () => {}, estado: async () => ({}), irPara: async () => ({ aceite: true }),
+      parar: async () => {}, regressar: async () => {}
+    });
+
+    const c = new ControladorDeMissao({
+      dispositivo: fisico,
+      missao: { objetivo: { proposito: 'inspecionar' }, inicio: BASE, destino: DESTINO }
+    });
+
+    const v = c.verificar();
+    assert(!v.ok, 'hardware não pode passar sem autorização');
+    assertIncludes(v.erros.join(' '), 'dispositivo físico');
+  });
+
+  test('com autorização explícita, o mesmo dispositivo passa', () => {
+    const fisico = dispositivoDeNavegacao({
+      id: 'drone-real', simulado: false,
+      ligar: async () => {}, estado: async () => ({}), irPara: async () => ({ aceite: true }),
+      parar: async () => {}, regressar: async () => {}
+    });
+
+    const c = new ControladorDeMissao({
+      dispositivo: fisico,
+      permitirDispositivoReal: true,
+      missao: { objetivo: { proposito: 'inspecionar' }, inicio: BASE, destino: DESTINO }
+    });
+
+    assert(c.verificar().ok, 'com autorização devia passar');
+  });
+
+  test('missão sem propósito é recusada', () => {
+    const c = new ControladorDeMissao({
+      dispositivo: criarSimulado({ posicao: BASE }),
+      missao: { inicio: BASE, destino: DESTINO }
+    });
+
+    const v = c.verificar();
+    assert(!v.ok, 'sem propósito não há plano B legítimo');
+    assertIncludes(v.erros.join(' '), 'proposito');
+  });
+});
+
+
+describe('🗣️ Pedidos de missão em texto', () => {
+  const pedidos = require('../nexo/navegacao/pedidos');
+
+  test('lê coordenadas em vários formatos', () => {
+    assertEqual(pedidos.lerPonto('40.15,-8.65').lat, 40.15);
+    assertEqual(pedidos.lerPonto('40.15 -8.65').lng, -8.65);
+    assertEqual(pedidos.lerPonto({ lat: 1, lng: 2 }).lat, 1);
+  });
+
+  test('coordenadas impossíveis são recusadas', () => {
+    assertEqual(pedidos.lerPonto('200,500'), null);
+    assertEqual(pedidos.lerPonto('sem números'), null);
+  });
+
+  test('lê uma zona com nome, centro e raio', () => {
+    const z = pedidos.lerZona('aeródromo:40.166,-8.667,400');
+    assertEqual(z.nome, 'aeródromo');
+    assertEqual(z.raioM, 400);
+    assertEqual(z.centro.lat, 40.166);
+  });
+
+  test('planeia e descreve uma rota em texto', () => {
+    const texto = pedidos.planearEmTexto({ origem: '40.15,-8.65', destino: '40.18,-8.68' });
+    assertIncludes(texto, 'Rota planeada');
+    assertIncludes(texto, 'Distância');
+  });
+
+  test('explica porque não há rota, em vez de inventar uma', () => {
+    const texto = pedidos.planearEmTexto({
+      origem: '40.15,-8.65', destino: '40.18,-8.68',
+      evitar: 'restrição:40.18,-8.68,500'
+    });
+    assertIncludes(texto, 'Não há rota viável');
+  });
+
+  test('origem inválida dá erro claro', () => {
+    assertIncludes(pedidos.planearEmTexto({ origem: 'ali', destino: '40.18,-8.68' }), 'origem');
+  });
+});
+
 
 // ═══════════════════════════════════════════════════════════
 // RESULTADO FINAL

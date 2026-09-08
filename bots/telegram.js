@@ -1,5 +1,5 @@
 /**
- * 🤖 MyAssistBOT - Telegram Bot
+ * 🤖 NEXO - Telegram Bot
  * Bot de Telegram integrado com o orquestrador (i18n)
  */
 

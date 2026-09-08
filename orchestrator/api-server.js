@@ -1,5 +1,5 @@
 /**
- * 🌐 MyAssistBOT - Servidor Unificado
+ * 🌐 NEXO - Servidor Unificado
  * 
  * Servidor único: API REST + WebSocket + Interface Web + Dashboard
  * Porta padrão: 7777
@@ -18,7 +18,10 @@ const security = require('./security');
 const aiAgent = require('../agents/aiAgent');
 const llmRouter = require('./llmRouter');
 const ragEngine = require('./ragEngine');
+const providerHealth = require('./providerHealth');
 const codeRunner = require('../agents/codeRunner');
+const dispositivo = require('./dispositivo');
+const definicoes = require('./definicoes');
 
 // Deploy helper (wizard AWS)
 let deployHelper;
@@ -64,7 +67,7 @@ app.use(express.static(path.join(__dirname, '..', 'web', 'public')));
 // Lista de endpoints disponíveis
 app.get('/api', (req, res) => {
   res.json({
-    name: 'MyAssistBOT API',
+    name: 'NEXO API',
     version: '2.0.0',
     endpoints: {
       'GET /api': 'Esta lista de endpoints',
@@ -91,7 +94,7 @@ app.get('/api', (req, res) => {
       'POST /api/deploy/generate-script': 'Gerar script de instalação',
       'GET /setup': 'Wizard de setup AWS'
     },
-    documentation: 'https://github.com/NjoYMassaworXp/MyAssist_BOT'
+    documentation: 'https://github.com/13devil13o0-beep/Nexo-'
   });
 });
 
@@ -118,11 +121,62 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+/**
+ * O que o NEXO vê da máquina onde o motor corre, e que perfil de arranque isso
+ * justifica. Serve para diagnóstico e para a interface poder mostrar o modo
+ * actual nas definições.
+ *
+ * Atenção: isto descreve a máquina do MOTOR, não o aparelho de quem está a ver
+ * a página. Quem abre o NEXO no telemóvel recebe aqui as características do PC.
+ * O peso da página é decidido no browser, que é o único que sabe o seu ecrã.
+ */
+app.get('/api/dispositivo', (req, res) => {
+  const decisao = dispositivo.resolver({ definicoes: definicoes.ler() });
+
+  res.json({
+    perfil: decisao.perfil,
+    descricao: dispositivo.DESCRICAO[decisao.perfil] || null,
+    motivo: decisao.motivo,
+    origem: decisao.origem,
+    sinais: decisao.sinais,
+    definicoes: definicoes.obter(),
+    perfis: dispositivo.PERFIS
+  });
+});
+
+/** Guarda o modo de arranque escolhido pelo utilizador. */
+app.post('/api/dispositivo/modo', security.authMiddleware, (req, res) => {
+  const { modo, arrancarEscondido, perfilPagina } = req.body || {};
+
+  if (modo !== undefined) {
+    if (modo !== 'auto' && !dispositivo.perfilValido(modo)) {
+      return res.status(400).json({
+        error: 'Modo inválido',
+        validos: ['auto', ...dispositivo.PERFIS]
+      });
+    }
+    definicoes.definir('modo', modo);
+  }
+
+  if (arrancarEscondido !== undefined) {
+    definicoes.definir('arrancarEscondido', !!arrancarEscondido);
+  }
+
+  if (perfilPagina !== undefined) {
+    if (!['auto', 'completo', 'leve'].includes(perfilPagina)) {
+      return res.status(400).json({ error: 'Perfil de página inválido', validos: ['auto', 'completo', 'leve'] });
+    }
+    definicoes.definir('perfilPagina', perfilPagina);
+  }
+
+  res.json({ ok: true, definicoes: definicoes.obter(), nota: 'Aplica-se ao próximo arranque.' });
+});
+
 app.get('/api/status', (req, res) => {
   res.json({
     online: true,
     version: '2.0.0',
-    name: 'MyAssistBOT',
+    name: 'NEXO',
     uptime: Math.floor((Date.now() - startTime) / 1000),
     memory: process.memoryUsage(),
     ai: {
@@ -625,7 +679,7 @@ wss.on('connection', (ws) => {
     data: { 
       clientId, 
       version: '2.0.0',
-      message: 'Bem-vindo ao MyAssistBOT!' 
+      message: 'Bem-vindo ao NEXO!' 
     }
   }));
   
@@ -924,7 +978,7 @@ app.post('/api/deploy/health-check', async (req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log('');
   console.log('==========================================================');
-  console.log('       MyAssistBOT - Servidor Unificado');
+  console.log('       NEXO - Servidor Unificado');
   console.log('----------------------------------------------------------');
   console.log(`  Web:       http://localhost:${PORT}`);
   console.log(`  API:       http://localhost:${PORT}/api`);
@@ -937,6 +991,13 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('');
   
   security.logAction('system', 'server-started', { port: PORT });
+
+  // Sentinela de modelos: avisa se algum fornecedor descontinuou o modelo
+  // configurado. Não bloqueia o arranque e cala-se quando está tudo bem.
+  providerHealth.checkOnStartup();
+
+  // Carrega o modelo local para memória, para a 1.ª mensagem ser rápida.
+  llmRouter.warmupLocal();
 });
 
 module.exports = { app, server, wss };

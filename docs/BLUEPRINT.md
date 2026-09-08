@@ -1,4 +1,4 @@
-# 🏗️ MyAssistBOT — BLUEPRINT DO PROJETO
+# 🏗️ NEXO — BLUEPRINT DO PROJETO
 
 > Documento de referência para finalização do projeto.  
 > Gerado a partir da auditoria completa do código + GUIA_UTILIZADOR.md + REFERENCIA_RAPIDA.md
@@ -168,7 +168,7 @@
 ## 🚫 Regras Invioláveis
 
 ### R1 — GRATUIDADE TOTAL
-> O MyAssistBOT é e deve permanecer 100% gratuito. NUNCA introduzir custos obrigatórios.
+> O NEXO é e deve permanecer 100% gratuito. NUNCA introduzir custos obrigatórios.
 - A API Groq tem tier gratuito (14.400 req/dia) — SEMPRE usar como default
 - Qualquer API paga deve ser OPCIONAL (Serper, Brave, etc.)
 - Motor de pesquisa gratuito (DuckDuckGo) deve funcionar sem configuração
@@ -210,7 +210,7 @@
 - Scripts npm existentes (`npm run dev`, `npm run cli`, etc.) NUNCA mudam de significado
 
 ### R7 — IDIOMA E UX
-> O MyAssistBOT fala português (pt-PT) por defeito. Toda a UX é em português.
+> O NEXO fala português (pt-PT) por defeito. Toda a UX é em português.
 - Mensagens de sistema, erros e ajuda em português
 - Debug/logs podem ser em inglês (para compatibilidade)
 - Nomes de variáveis e código em inglês (standard de engenharia)
@@ -373,4 +373,4 @@
 
 ---
 
-*Documento gerado em 2026-02-11 | MyAssistBOT v2.0*
+*Documento gerado em 2026-02-11 | NEXO v2.0*

@@ -128,7 +128,7 @@ Data: ${new Date().toLocaleString('pt-PT')}
 ${content}
 
 ───────────────────────────────────────
-Criado por MyAssistBOT
+Criado por NEXO
 `;
 
   return writeFile(filePath, noteContent);

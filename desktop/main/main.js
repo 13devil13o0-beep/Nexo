@@ -1,5 +1,5 @@
 /**
- * 🖥️ MyAssistBOT Desktop - Main Process (Electron)
+ * 🖥️ NEXO Desktop - Main Process (Electron)
  * 
  * Gere janela, system tray, atalhos globais
  */
@@ -19,6 +19,7 @@ const {
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const definicoes = require('../../orchestrator/definicoes');
 
 // Fix Chromium GPU cache errors on Windows (permission denied)
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
@@ -38,7 +39,10 @@ app.commandLine.appendSwitch('auto-accept-camera-and-microphone-capture');
 
 // Configuração
 const isDev = process.argv.includes('--dev');
-const CORE_PORT = 7777;
+// Arranque só na bandeja, sem mostrar a janela. Quem põe o NEXO a iniciar com
+// o sistema não quer uma janela a saltar à frente do que estava a fazer.
+const arrancarOculto = process.argv.includes('--oculto');
+const CORE_PORT = process.env.PORT || 7777;
 const CORE_CHECK_INTERVAL = 3000;
 
 // Estado
@@ -52,13 +56,37 @@ let coreOnline = false;
 // CORE MANAGEMENT
 // ═══════════════════════════════════════════════════════════
 
-function startCore() {
+/** Já há um motor a responder nesta porta? */
+async function coreResponde() {
+  const controlador = new AbortController();
+  const relogio = setTimeout(() => controlador.abort(), 800);
+  try {
+    const resposta = await fetch(`http://localhost:${CORE_PORT}/api/status`, { signal: controlador.signal });
+    return resposta.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(relogio);
+  }
+}
+
+async function startCore() {
   if (isDev) {
     console.log('[Main] Modo dev: Core deve ser iniciado manualmente (npm run core)');
     checkCoreStatus();
     return;
   }
-  
+
+  // Reaproveitar um motor já de pé. Sem esta verificação, abrir o NEXO com um
+  // `npm run core` a correr punha um segundo servidor a morrer com EADDRINUSE
+  // e a janela ficava a apontar para o primeiro sem ninguém perceber porquê.
+  if (await coreResponde()) {
+    console.log('[Main] Já há um Core a responder na porta', CORE_PORT, '— a usar esse.');
+    coreOnline = true;
+    updateTrayMenu();
+    return;
+  }
+
   const corePath = path.join(__dirname, '../../orchestrator/api-server.js');
   
   if (!fs.existsSync(corePath)) {
@@ -129,6 +157,9 @@ function createWindow() {
     transparent: true,
     resizable: true,
     skipTaskbar: false,
+    // Com --oculto a janela existe mas nunca chega a aparecer: o NEXO fica na
+    // bandeja à espera do atalho ou do clique.
+    show: !arrancarOculto,
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
@@ -137,7 +168,25 @@ function createWindow() {
     icon: path.join(__dirname, '../../assets/icon.png')
   });
   
-  mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+  // Interface única: carregamos a mesma página que o browser recebe, servida
+  // pelo Core. Antes existia uma cópia em desktop/renderer que divergia da do
+  // browser e recebia todas as melhorias que o browser nunca via.
+  //
+  // A janela é criada antes de startCore(), portanto as primeiras tentativas
+  // falham por o servidor ainda não estar de pé. Repetimos até entrar, em vez
+  // de deixar uma janela em branco.
+  const CORE_URL = `http://localhost:${CORE_PORT}`;
+  const RETRY_MS = 800;
+
+  mainWindow.loadURL(CORE_URL);
+
+  mainWindow.webContents.on('did-fail-load', (_event, code, description) => {
+    if (mainWindow.isDestroyed()) return;
+    console.warn(`[UI] Core ainda não responde (${code}: ${description}), a repetir...`);
+    setTimeout(() => {
+      if (!mainWindow.isDestroyed()) mainWindow.loadURL(CORE_URL);
+    }, RETRY_MS);
+  });
   
   // Dev tools em desenvolvimento
   if (isDev) {
@@ -179,7 +228,7 @@ function createTray() {
   
   try {
     tray = new Tray(icon);
-    tray.setToolTip('MyAssistBOT - Assistente IA');
+    tray.setToolTip('NEXO - Assistente IA');
     
     updateTrayMenu();
     
@@ -200,12 +249,48 @@ function createTray() {
   }
 }
 
+/**
+ * Submenu do modo de arranque.
+ *
+ * A escolha fica guardada em memory/definicoes.json e só vale ao próximo
+ * arranque — trocar de casca com o NEXO aberto obrigava a fechar a janela por
+ * baixo do utilizador, o que é pior do que esperar.
+ */
+function construirMenuDeModos() {
+  const actual = definicoes.obter('modo') || 'auto';
+  const escondido = definicoes.obter('arrancarEscondido') === true;
+
+  const modo = (id, label) => ({
+    label,
+    type: 'radio',
+    checked: actual === id,
+    click: () => { definicoes.definir('modo', id); updateTrayMenu(); }
+  });
+
+  return [
+    { label: 'Aplica-se ao próximo arranque', enabled: false },
+    { type: 'separator' },
+    modo('auto', 'Automático (conforme o aparelho)'),
+    modo('completo', 'Interface completa'),
+    modo('leve', 'Modo leve (browser)'),
+    modo('consola', 'Consola (terminal)'),
+    modo('servico', 'Em segundo plano (sem janela)'),
+    { type: 'separator' },
+    {
+      label: 'Arrancar escondido na bandeja',
+      type: 'checkbox',
+      checked: escondido,
+      click: () => { definicoes.definir('arrancarEscondido', !escondido); updateTrayMenu(); }
+    }
+  ];
+}
+
 function updateTrayMenu() {
   if (!tray) return;
-  
+
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: '🤖 MyAssistBOT',
+      label: '🤖 NEXO',
       enabled: false
     },
     { type: 'separator' },
@@ -229,6 +314,10 @@ function updateTrayMenu() {
       }
     },
     { type: 'separator' },
+    {
+      label: '🚦 Modo de arranque',
+      submenu: construirMenuDeModos()
+    },
     {
       label: '⚙️ Preferências',
       click: () => {
@@ -301,7 +390,7 @@ ipcMain.handle('copy-to-clipboard', (_, text) => {
 // ═══════════════════════════════════════════════════════════
 
 app.whenReady().then(() => {
-  console.log('[MyAssistBOT Desktop] A iniciar...');
+  console.log('[NEXO Desktop] A iniciar...');
   
   // Auto-grant media permissions (microphone for speech recognition)
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
