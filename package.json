@@ -93,6 +93,7 @@
     "files": [
       "agents/**/*",
       "orchestrator/**/*",
+      "nexo/**/*",
       "plugins/**/*",
       "cli/**/*",
       "web/**/*",
@@ -103,8 +104,15 @@
       "assets/**/*",
       "scripts/**/*",
       "*.js",
-      "package.json",
-      ".env"
+      "package.json"
+    ],
+    "asarUnpack": [
+      "orchestrator/**/*",
+      "agents/**/*",
+      "nexo/**/*",
+      "plugins/**/*",
+      "i18n/**/*",
+      "locales/**/*"
     ],
     "win": {
       "target": [

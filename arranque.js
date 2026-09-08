@@ -123,7 +123,15 @@ function lancarCompleto(decisao) {
   const argumentos = [CAMINHO_JANELA];
   if (escondido) argumentos.push('--oculto');
 
-  seguir(spawn(binarioElectron, argumentos, { stdio: 'inherit', env: process.env }));
+  // ELECTRON_RUN_AS_NODE faz o Electron comportar-se como Node puro: sem
+  // janelas, sem `app`, sem nada. É o que o próprio NEXO usa para lançar o
+  // motor, mas se a variável estiver no ambiente da máquina — acontece, e
+  // aconteceu nesta — o Electron rebentava com um "Cannot read properties of
+  // undefined" que não diz nada a ninguém. Aqui vai-se embora.
+  const ambiente = { ...process.env };
+  delete ambiente.ELECTRON_RUN_AS_NODE;
+
+  seguir(spawn(binarioElectron, argumentos, { stdio: 'inherit', env: ambiente }));
 }
 
 /**
