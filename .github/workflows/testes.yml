@@ -20,17 +20,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # O Windows é onde o NEXO é usado como aplicação de secretária, e
-          # onde a suite corre verde hoje. Este tem de passar.
-          - os: windows-latest
-            obrigatorio: true
-          # O Linux é o alvo do uso sem ecrã — servidores, automação, o
-          # hardware dos drones. Ainda não foi verificado, por isso não
-          # bloqueia; está aqui para as diferenças aparecerem em vez de se
-          # descobrirem no dia em que alguém precisa delas.
-          - os: ubuntu-latest
-            obrigatorio: false
+        # Windows: onde o NEXO é usado como aplicação de secretária.
+        # Linux: o alvo do uso sem ecrã — servidores, automação, o hardware
+        # dos drones.
+        #
+        # O Linux entrou aqui a não bloquear, por não estar verificado. Bem
+        # visto: a primeira execução acusou logo uma falha. Só que o job
+        # aparecia VERDE à mesma — o continue-on-error esconde o resultado e
+        # obriga a ler os registos para saber a verdade, o que ninguém faz.
+        # Corrigida a falha (era o whitelist de caminhos a comparar texto em
+        # vez de pastas), os dois passam e os dois passam a bloquear.
+        os: [windows-latest, ubuntu-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -45,4 +45,3 @@ jobs:
 
       - name: Correr testes
         run: npm test
-        continue-on-error: ${{ !matrix.obrigatorio }}
