@@ -362,10 +362,6 @@ O NEXO é **100% gratuito e open-source**. Se o projeto te é útil e queres apo
 
 ---
 
-git add .
-git commit -m "Teste: alteração de identidade"
-git push
-
 <p align="center">
   <b>🤖 NEXO v2.0</b><br>
   16+ agentes · 6 interfaces · 80+ comandos · 4 idiomas · 100% gratuito<br>
