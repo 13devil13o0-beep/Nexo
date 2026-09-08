@@ -2249,6 +2249,32 @@ describe('🔤 Nomes de variáveis escritos por pouco', () => {
     assertEqual(t.provavelmente, 'ANTHROPIC_API_KEY');
   });
 
+  test('apanha uma chave repetida e diz qual manda', () => {
+    const env = ['PORT=7777', 'GROQ_API_KEY=umachaveboa123', 'PORT=8787'].join('\n');
+    const repetidas = diagnostico.detectarChavesRepetidas('x', () => env);
+    assertEqual(repetidas.length, 1);
+    assertEqual(repetidas[0].nome, 'PORT');
+    assertEqual(repetidas[0].valeA, 3, 'num .env, a ultima linha e a que conta');
+  });
+
+  test('um .env sem repeticoes nao gera queixa', () => {
+    const env = ['PORT=7777', 'GROQ_API_KEY=abc123456789'].join('\n');
+    assertEqual(diagnostico.detectarChavesRepetidas('x', () => env).length, 0);
+  });
+
+  test('uma chave repetida impede o arranque limpo', () => {
+    const d = diagnostico.diagnosticar({
+      versaoNode: '20.0.0',
+      env: { GROQ_API_KEY: 'gsk_chavelongaboa123' },
+      raiz: 'C:/fake',
+      existe: () => true,
+      chavesRepetidas: [{ nome: 'PORT', linhas: [1, 3], valeA: 3 }]
+    });
+    const p = d.problemas.find(x => x.id === 'chave-repetida');
+    assert(p, 'devia acusar a repeticao');
+    assertIncludes(p.humano, 'Só a última conta');
+  });
+
   test('não se queixa de nomes correctos', () => {
     assertEqual(comEnv('GROQ_API_KEY=gsk_boa\nPORT=7777\n').length, 0);
   });

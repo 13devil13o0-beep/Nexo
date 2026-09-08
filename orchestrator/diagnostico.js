@@ -159,6 +159,39 @@ function detectarNomesTrocados(caminhoEnv, lerFicheiro) {
   return trocados;
 }
 
+/**
+ * Procura chaves repetidas no .env.
+ *
+ * Num ficheiro de ambiente, a última linha ganha. Quem edita a primeira fica
+ * a olhar para o valor certo, no sítio certo, sem efeito nenhum — e não há
+ * mensagem de erro que o denuncie.
+ *
+ * Nunca lê valores, só nomes e a linha onde aparecem.
+ */
+function detectarChavesRepetidas(caminhoEnv, lerFicheiro) {
+  const ler = lerFicheiro || ((f) => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return null; } });
+  const bruto = ler(caminhoEnv || path.join(RAIZ, '.env'));
+  if (!bruto) return [];
+
+  const vistas = new Map();
+
+  bruto.split(/\r?\n/).forEach((linha, i) => {
+    const limpa = linha.trim();
+    if (!limpa || limpa.startsWith('#')) return;
+
+    const igual = limpa.indexOf('=');
+    if (igual < 1) return;
+
+    const nome = limpa.slice(0, igual).trim();
+    if (!vistas.has(nome)) vistas.set(nome, []);
+    vistas.get(nome).push(i + 1);
+  });
+
+  return [...vistas.entries()]
+    .filter(([, linhas]) => linhas.length > 1)
+    .map(([nome, linhas]) => ({ nome, linhas, valeA: linhas[linhas.length - 1] }));
+}
+
 // ═══════════════════════════════════════════════════════════
 // VERIFICAÇÕES (com rede)
 // ═══════════════════════════════════════════════════════════
@@ -239,6 +272,15 @@ function diagnosticar(fontes = {}) {
 
   const problemas = [];
   const avisos = [];
+
+  for (const r of (fontes.chavesRepetidas || detectarChavesRepetidas(path.join(raiz, '.env'), fontes.lerFicheiro))) {
+    problemas.push({
+      id: 'chave-repetida',
+      humano: `"${r.nome}" aparece ${r.linhas.length} vezes no .env (linhas ${r.linhas.join(', ')}). Só a última conta — editar as outras não faz nada.`,
+      comoResolver: `Deixa só a da linha ${r.valeA} e apaga as restantes.`,
+      podeSerAutomatico: true
+    });
+  }
 
   for (const t of (fontes.nomesTrocados || detectarNomesTrocados(path.join(raiz, '.env'), fontes.lerFicheiro))) {
     problemas.push({
@@ -370,6 +412,7 @@ module.exports = {
   verificarEnv,
   fornecedoresConfigurados,
   detectarNomesTrocados,
+  detectarChavesRepetidas,
   verificarOllama,
   testarChave,
   diagnosticar,
