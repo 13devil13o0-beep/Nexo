@@ -447,8 +447,31 @@ describe('🖥️ System Agent', () => {
     assert(systemAgent.isPathAllowed(process.cwd()));
   });
 
-  test('isPathAllowed rejeita C:\\Windows', () => {
-    assert(!systemAgent.isPathAllowed('C:\\Windows\\System32'));
+  test('isPathAllowed rejeita pastas de sistema', () => {
+    // Cada sistema tem as suas. Em Linux, "C:\Windows" não é um caminho de
+    // sistema — é um nome de ficheiro estranho dentro da pasta actual, e o
+    // teste falhava lá por estar a perguntar a coisa errada.
+    const doSistema = process.platform === 'win32'
+      ? ['C:\\Windows\\System32', 'C:\\Program Files']
+      : ['/etc/passwd', '/root', '/usr/bin'];
+
+    for (const caminho of doSistema) {
+      assert(!systemAgent.isPathAllowed(caminho), `devia recusar ${caminho}`);
+    }
+  });
+
+  test('isPathAllowed não se deixa enganar por um prefixo', () => {
+    // "Documents_privado" começa por "Documents" mas é outra pasta. Um
+    // startsWith sem separador no fim deixava-a passar.
+    const path = require('path');
+    const vizinha = path.join(require('os').homedir(), 'Documents_privado', 'segredos.txt');
+    assert(!systemAgent.isPathAllowed(vizinha), 'pasta vizinha não é pasta permitida');
+  });
+
+  test('isPathAllowed continua a aceitar o que está mesmo lá dentro', () => {
+    const path = require('path');
+    const dentro = path.join(require('os').homedir(), 'Documents', 'nota.txt');
+    assert(systemAgent.isPathAllowed(dentro), 'um ficheiro em Documents é permitido');
   });
 
   test('isCommandAllowed aceita "dir"', () => {

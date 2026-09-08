@@ -108,9 +108,18 @@ function logOperation(operation, details, success = true) {
  */
 function isPathAllowed(targetPath) {
   const resolved = path.resolve(targetPath);
-  return ALLOWED_PATHS.some(allowed => 
-    resolved.startsWith(path.resolve(allowed))
-  );
+
+  return ALLOWED_PATHS.some(allowed => {
+    const raiz = path.resolve(allowed);
+
+    // A própria pasta permitida conta.
+    if (resolved === raiz) return true;
+
+    // O separador no fim é o que impede a fuga por prefixo. Um simples
+    // startsWith(raiz) deixava passar "Documents_privado" por começar por
+    // "Documents" — pasta diferente, sem relação nenhuma, mas aceite.
+    return resolved.startsWith(raiz + path.sep);
+  });
 }
 
 /**
