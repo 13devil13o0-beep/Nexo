@@ -1,0 +1,102 @@
+# Constrói os instaladores e publica-os em Releases.
+#
+# PORQUE ISTO EXISTE
+# O .exe é o único caminho para quem nunca abriu um terminal — quem instala
+# o NEXO com dois cliques em vez de instalar git e Node primeiro. Mas era
+# construído à mão, quase nunca, e por isso partiu-se três vezes sem ninguém
+# dar por isso: o .env ia lá dentro com as chaves de API, faltava a pasta
+# nexo/ (rebentava a arrancar) e a configuração ficou obsoleta com o
+# electron-builder 26 (nem construía).
+#
+# A partir daqui, cada etiqueta de versão prova que o instalador sai inteiro.
+#
+# COMO PUBLICAR UMA VERSÃO
+#   git tag v2.1.0
+#   git push origin v2.1.0
+#
+# O macOS não está aqui de propósito: sem certificado da Apple, o .app sai
+# sem assinatura e o Gatekeeper bloqueia-o com um aviso de "programa
+# danificado" — precisamente para o utilizador não-técnico a quem se
+# destinava. Um instalador que assusta é pior do que instalador nenhum.
+
+name: Publicar instaladores
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  construir:
+    name: ${{ matrix.nome }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            nome: Windows
+            comando: npm run dist:win
+            ficheiros: dist/*.exe
+          - os: ubuntu-latest
+            nome: Linux
+            comando: npm run dist:linux
+            ficheiros: |
+              dist/*.AppImage
+              dist/*.deb
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependências
+        run: npm install
+
+      # Os ícones estão versionados, mas regenerá-los aqui garante que o
+      # instalador leva sempre o que o icon.svg diz — incluindo o icon.icns,
+      # que precisa do png2icons.
+      - name: Gerar ícones
+        run: npm run icons
+
+      - name: Construir instalador
+        run: ${{ matrix.comando }}
+
+      # Guardados mesmo quando o disparo é manual e não há Release nenhuma
+      # para onde os enviar.
+      - name: Guardar como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexo-${{ matrix.nome }}
+          path: ${{ matrix.ficheiros }}
+          if-no-files-found: error
+
+      - name: Publicar na Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          # Os dois sistemas da matriz correm ao mesmo tempo e ambos tentam
+          # criar a Release. Quem chegar em segundo falha aqui, e não faz mal.
+          gh release create "$TAG" --generate-notes --title "NEXO $TAG" 2>/dev/null || true
+
+          # nullglob: um padrão sem correspondência desaparece em vez de
+          # passar como texto. Sem isto, o Windows tentava enviar um ficheiro
+          # chamado "dist/*.AppImage" e o comando morria.
+          shopt -s nullglob
+          ficheiros=(dist/*.exe dist/*.AppImage dist/*.deb)
+
+          if [ ${#ficheiros[@]} -eq 0 ]; then
+            echo "Nenhum instalador para publicar." >&2
+            exit 1
+          fi
+
+          gh release upload "$TAG" "${ficheiros[@]}" --clobber
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}

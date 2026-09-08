@@ -1,0 +1,48 @@
+# Corre a suite de testes a cada alteração.
+#
+# Existe por uma razão concreta: três avarias no empacotamento do .exe
+# passaram despercebidas durante commits a fio, porque ninguém corria esse
+# caminho. O que não é executado automaticamente apodrece em silêncio.
+
+name: Testes
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  testes:
+    name: Testes (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # O Windows é onde o NEXO é usado como aplicação de secretária, e
+          # onde a suite corre verde hoje. Este tem de passar.
+          - os: windows-latest
+            obrigatorio: true
+          # O Linux é o alvo do uso sem ecrã — servidores, automação, o
+          # hardware dos drones. Ainda não foi verificado, por isso não
+          # bloqueia; está aqui para as diferenças aparecerem em vez de se
+          # descobrirem no dia em que alguém precisa delas.
+          - os: ubuntu-latest
+            obrigatorio: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # npm install e não npm ci: este projecto não versiona o package-lock.
+      - name: Instalar dependências
+        run: npm install
+
+      - name: Correr testes
+        run: npm test
+        continue-on-error: ${{ !matrix.obrigatorio }}

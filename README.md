@@ -71,7 +71,23 @@ is best suited for each task.
 
 ---
 
-## 🚀 Início Rápido
+## 🚀 Instalar
+
+Há dois caminhos, para duas situações diferentes.
+
+### 🖱️ Só quero usar o NEXO
+
+**[Descarregar o instalador →](https://github.com/13devil13o0-beep/Nexo/releases/latest)**
+
+Dois cliques. Não é preciso instalar mais nada — nem Node, nem git, nem abrir
+um terminal. Fica um ícone do NEXO no ambiente de trabalho e, ao abrir pela
+primeira vez, ele pergunta que motor de IA queres usar (há opções gratuitas).
+
+Disponível para **Windows** (`.exe`) e **Linux** (`.AppImage` e `.deb`).
+
+### ⌨️ Quero mexer no código, ou usar sem ecrã
+
+Para desenvolvimento, servidores, automação e hardware sem monitor:
 
 ```bash
 git clone https://github.com/13devil13o0-beep/Nexo.git
@@ -80,12 +96,16 @@ npm run instalar   # Verifica, instala e configura a IA — guiado, em portuguê
 npm start          # Arranca no modo certo para este computador
 ```
 
-> O `npm run instalar` trata de tudo: confirma a versão do Node, descarrega só
-> as bibliotecas que **este** computador precisa e ajuda-te a escolher o motor
-> de IA — grátis na nuvem (Groq, Cerebras), a tua própria chave paga, ou tudo
-> local com [Ollama](https://ollama.com/download), sem internet e sem conta.
+> Precisa de [Node.js 18+](https://nodejs.org). O `npm run instalar` trata do
+> resto: confirma a versão do Node, descarrega só as bibliotecas que **este**
+> computador precisa e ajuda-te a escolher o motor de IA — grátis na nuvem
+> (Groq, Cerebras), a tua própria chave paga, ou tudo local com
+> [Ollama](https://ollama.com/download), sem internet e sem conta.
 >
-> Já instalado e algo deixou de funcionar? `npm run diagnostico` diz o que falta.
+> Numa máquina sem ecrã, o NEXO percebe-o sozinho e arranca em modo consola ou
+> serviço. Vê [os perfis de arranque no guia](GUIA_UTILIZADOR.md#o-nexo-escolhe-o-modo-sozinho).
+>
+> Algo deixou de funcionar? `npm run diagnostico` diz o que falta.
 
 ---
 

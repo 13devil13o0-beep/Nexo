@@ -2416,3 +2416,13 @@ if (failed > 0) {
 }
 
 console.log('═'.repeat(55) + '\n');
+
+// A suite carrega agentes que deixam temporizadores a correr — o agendador, o
+// monitor de alertas, o histórico da área de transferência. O Node só fecha
+// quando não sobra nada por fazer, e isso nunca acontece: o `npm test` ficava
+// pendurado depois de já ter dito o resultado. Num runner de CI seria um
+// timeout eterno em vez de um teste verde.
+//
+// A saída vai dentro do callback do write para o resultado chegar inteiro ao
+// ecrã (ou ao ficheiro de log) antes de o processo desaparecer.
+process.stdout.write('', () => process.exit(failed > 0 ? 1 : 0));
