@@ -21,6 +21,22 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const definicoes = require('../../orchestrator/definicoes');
 
+// Prevenir múltiplas instâncias — tem de ser a primeira coisa a acontecer.
+// Antes estava no fim do ficheiro, depois de app.whenReady() já registado: se
+// o bloqueio falhasse (outra instância presa em segundo plano, por exemplo de
+// um arranque anterior que não fechou bem), o app.quit() disparava em
+// silêncio, sem janela, sem Core, sem uma linha na consola a dizer porquê —
+// e quem estivesse a arrancar via `npm start` via só o terminal a voltar ao
+// prompt sem explicação nenhuma.
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  console.error('[Main] Já há outra instância do NEXO a correr — a fechar esta.');
+  console.error('       Se não vires nenhuma janela, procura "Electron" ou "NEXO" no Gestor de Tarefas e termina-a.');
+  app.quit();
+  process.exit(0);
+}
+
 // Fix Chromium GPU cache errors on Windows (permission denied)
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 app.commandLine.appendSwitch('disable-gpu-cache');
@@ -563,17 +579,10 @@ app.on('before-quit', () => {
   try { globalShortcut.unregisterAll(); } catch (e) { /* ignore if not ready */ }
 });
 
-// Prevenir múltiplas instâncias
-const gotTheLock = app.requestSingleInstanceLock();
-
-if (!gotTheLock) {
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    }
-  });
-}
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
+});
