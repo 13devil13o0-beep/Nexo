@@ -1,12 +1,15 @@
 {
   "name": "nexo-assistant",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "🤖 Assistente IA open-source com 16+ agentes autónomos, 6 interfaces (Desktop/Web/Telegram/Discord/CLI/API), i18n multilingue (PT/EN/ES/FR), controlo do OS, criação de apps via IA — 100% gratuito",
   "main": "desktop/main/main.js",
   "engines": {
     "node": ">=18.0.0"
   },
-  "author": "NjoY MassagXprs",
+  "author": {
+    "name": "NjoY MassagXprs",
+    "email": "13devil13o0-beep@users.noreply.github.com"
+  },
   "license": "MIT",
   "scripts": {
     "instalar": "node instalar.js",
