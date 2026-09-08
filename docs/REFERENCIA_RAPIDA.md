@@ -3,9 +3,35 @@
 ## Comandos de Início
 
 ```bash
-npm install           # Instalar
-npm run setup         # Configurar
-npm run dev          # Iniciar tudo
+npm run instalar      # Assistente guiado: verifica, instala e configura a IA
+npm start             # Arranca no modo certo para este computador
+npm run diagnostico   # O que está bem, o que falta e como se resolve
+```
+
+## Diagnóstico e manutenção
+
+| Comando | O que faz |
+|---------|-----------|
+| `npm run diagnostico` | Estado da instalação (Node, bibliotecas, motor de IA) |
+| `npm run dispositivo` | Que perfil de arranque este aparelho justifica |
+| `npm run providers` | Fornecedores conhecidos: quem sabe ferramentas, quem é local |
+| `npm run check:models` | Avisa se algum fornecedor descontinuou o modelo configurado |
+| `npm run metrics` | Tokens, custo e latência dos pedidos |
+| `npm run bench` | Banco de ensaios: 30 tarefas sempre iguais |
+| `npm run missao` | Demonstração de missão num aparelho simulado |
+
+## Perfis de arranque
+
+| Perfil | Quando | O que corre |
+|--------|--------|-------------|
+| Completo | ecrã + memória | janela própria, bandeja, atalhos |
+| Leve | ecrã pequeno ou pouca RAM | motor + página leve no browser |
+| Consola | SSH, sem gráficos | REPL do terminal |
+| Serviço | servidor, contentor | só o motor, sem janela |
+
+```bash
+npm start -- --modo=servico   # forçar
+NEXO_MODO=leve npm start      # ou pelo ambiente
 ```
 
 ## Interfaces

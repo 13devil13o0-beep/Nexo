@@ -84,6 +84,82 @@ function verificarEnv(raiz = RAIZ, existe = (p) => fs.existsSync(p)) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// NOMES QUASE CERTOS
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Nomes de variáveis que o NEXO reconhece. Tudo o que estiver a um passo ou
+ * dois de um destes, sem ser igual, é quase de certeza um erro de escrita.
+ */
+const NOMES_CONHECIDOS = [
+  ...CHAVES_DE_IA.map(c => c.env),
+  'LLM_PROVIDER_ORDER', 'OLLAMA_URL', 'OLLAMA_MODEL', 'API_KEY', 'PORT',
+  'NEXO_MODO', 'TELEGRAM_BOT_TOKEN', 'DISCORD_TOKEN', 'SERPER_API_KEY'
+];
+
+/** Distância de edição, com corte: acima do limite não interessa quanto é. */
+function distancia(a, b, limite = 2) {
+  if (Math.abs(a.length - b.length) > limite) return limite + 1;
+
+  let anterior = Array.from({ length: b.length + 1 }, (_, i) => i);
+
+  for (let i = 1; i <= a.length; i++) {
+    const actual = [i];
+    for (let j = 1; j <= b.length; j++) {
+      actual[j] = Math.min(
+        anterior[j] + 1,
+        actual[j - 1] + 1,
+        anterior[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    anterior = actual;
+  }
+
+  return anterior[b.length];
+}
+
+/**
+ * Procura nomes de variáveis escritos por pouco.
+ *
+ * Nasceu de um caso real: um .env com CEREBRAS_APY_KEY em vez de
+ * CEREBRAS_API_KEY. A chave estava correcta, o ficheiro estava lá, e o NEXO
+ * comportava-se exactamente como se ela não existisse. Um erro destes é
+ * invisível a olho nu e custa uma tarde a encontrar.
+ *
+ * Nunca lê valores — só nomes.
+ */
+function detectarNomesTrocados(caminhoEnv, lerFicheiro) {
+  const ler = lerFicheiro || ((f) => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return null; } });
+  const bruto = ler(caminhoEnv || path.join(RAIZ, '.env'));
+  if (!bruto) return [];
+
+  const trocados = [];
+
+  for (const linha of bruto.split(/\r?\n/)) {
+    const limpa = linha.trim();
+    if (!limpa || limpa.startsWith('#')) continue;
+
+    const igual = limpa.indexOf('=');
+    if (igual < 1) continue;
+
+    const nome = limpa.slice(0, igual).trim();
+    if (NOMES_CONHECIDOS.includes(nome)) continue;
+
+    // Sem valor não vale a pena avisar: é uma linha por preencher.
+    if (!limpa.slice(igual + 1).trim()) continue;
+
+    const parecido = NOMES_CONHECIDOS
+      .map(conhecido => ({ conhecido, d: distancia(nome, conhecido) }))
+      .filter(x => x.d > 0 && x.d <= 2)
+      .sort((a, b) => a.d - b.d)[0];
+
+    if (parecido) trocados.push({ escrito: nome, provavelmente: parecido.conhecido });
+  }
+
+  return trocados;
+}
+
+// ═══════════════════════════════════════════════════════════
 // VERIFICAÇÕES (com rede)
 // ═══════════════════════════════════════════════════════════
 
@@ -163,6 +239,15 @@ function diagnosticar(fontes = {}) {
 
   const problemas = [];
   const avisos = [];
+
+  for (const t of (fontes.nomesTrocados || detectarNomesTrocados(path.join(raiz, '.env'), fontes.lerFicheiro))) {
+    problemas.push({
+      id: 'nome-trocado',
+      humano: `No .env está "${t.escrito}", mas o NEXO procura "${t.provavelmente}". Uma letra a mais ou a menos e é como se a linha não existisse.`,
+      comoResolver: `Muda "${t.escrito}" para "${t.provavelmente}" — o valor fica igual.`,
+      podeSerAutomatico: true
+    });
+  }
 
   if (!node.ok) {
     problemas.push({
@@ -284,6 +369,7 @@ module.exports = {
   verificarDependencias,
   verificarEnv,
   fornecedoresConfigurados,
+  detectarNomesTrocados,
   verificarOllama,
   testarChave,
   diagnosticar,

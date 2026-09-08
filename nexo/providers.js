@@ -75,9 +75,9 @@ function doCatalogoPessoal(id, c, configurado) {
     formato: c.format,
     modeloPadrao: c.defaultModel,
     capacidades: {
-      // Nenhum destes tem hoje suporte a ferramentas ligado no projecto.
-      // É exactamente esta a lacuna que o passo seguinte fecha.
-      ferramentas: false,
+      // Já não é uma bandeira em baixo por omissão: cada entrada do catálogo
+      // declara o que sabe fazer, e quem não declara conta como não sabendo.
+      ferramentas: c.supportsTools === true,
       visao: !!c.supportsVision,
       streaming: !!c.supportsStreaming,
       raciocinio: false

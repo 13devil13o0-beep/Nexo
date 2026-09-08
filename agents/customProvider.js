@@ -26,6 +26,7 @@ const PROVIDER_CATALOG = {
     description: 'GPT-4o, GPT-4 Turbo, o1, o3 — o melhor em raciocínio e código',
     baseUrl: 'https://api.openai.com/v1',
     format: 'openai',
+    supportsTools: true,
     models: [
       { id: 'gpt-4o', name: 'GPT-4o', desc: 'Mais rápido e económico, multimodal', recommended: true },
       { id: 'gpt-4o-mini', name: 'GPT-4o Mini', desc: 'Leve e barato, bom para chat' },
@@ -46,6 +47,7 @@ const PROVIDER_CATALOG = {
     description: 'Claude Opus 5, Sonnet 5, Haiku 4.5 — excelente em texto longo e código',
     baseUrl: 'https://api.anthropic.com/v1',
     format: 'anthropic',
+    supportsTools: true,
     models: [
       { id: 'claude-opus-5', name: 'Claude Opus 5', desc: 'Máxima qualidade, contexto de 1M', recommended: true },
       { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', desc: 'Melhor equilíbrio qualidade/custo, contexto de 1M' },
@@ -65,6 +67,7 @@ const PROVIDER_CATALOG = {
     description: 'Mistral Large, Codestral — europeu, rápido e eficiente',
     baseUrl: 'https://api.mistral.ai/v1',
     format: 'openai',
+    supportsTools: true,
     models: [
       { id: 'mistral-large-latest', name: 'Mistral Large', desc: 'Mais potente, multilingue', recommended: true },
       { id: 'mistral-medium-latest', name: 'Mistral Medium', desc: 'Bom equilíbrio' },
@@ -84,6 +87,7 @@ const PROVIDER_CATALOG = {
     description: 'DeepSeek V3, R1 — chinês, barato e muito competente em código',
     baseUrl: 'https://api.deepseek.com/v1',
     format: 'openai',
+    supportsTools: true,
     models: [
       { id: 'deepseek-chat', name: 'DeepSeek V3', desc: 'Chat geral, muito económico', recommended: true },
       { id: 'deepseek-reasoner', name: 'DeepSeek R1', desc: 'Raciocínio avançado (chain-of-thought)' }
@@ -101,6 +105,7 @@ const PROVIDER_CATALOG = {
     description: 'Grok-2, Grok-3 — IA da X/Twitter, dados em tempo real',
     baseUrl: 'https://api.x.ai/v1',
     format: 'openai',
+    supportsTools: true,
     models: [
       { id: 'grok-3', name: 'Grok-3', desc: 'Último modelo, raciocínio avançado', recommended: true },
       { id: 'grok-3-mini', name: 'Grok-3 Mini', desc: 'Mais rápido e económico' },
@@ -119,6 +124,8 @@ const PROVIDER_CATALOG = {
     description: 'Command R+ — otimizado para RAG e aplicações empresariais',
     baseUrl: 'https://api.cohere.ai/v2',
     format: 'openai',
+  // API de ferramentas incompativel com o formato OpenAI
+    supportsTools: false,
     models: [
       { id: 'command-r-plus', name: 'Command R+', desc: 'Máximo poder, multilíngue', recommended: true },
       { id: 'command-r', name: 'Command R', desc: 'RAG otimizado' },
@@ -137,6 +144,7 @@ const PROVIDER_CATALOG = {
     description: 'Acesso a 100+ modelos (GPT-4, Claude, Llama, etc.) com uma só key',
     baseUrl: 'https://openrouter.ai/api/v1',
     format: 'openai',
+    supportsTools: true,
     models: [
       { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4 (via OpenRouter)', recommended: true },
       { id: 'openai/gpt-4o', name: 'GPT-4o (via OpenRouter)' },
@@ -157,6 +165,8 @@ const PROVIDER_CATALOG = {
     description: 'Qualquer API compatível com o formato OpenAI (LM Studio, vLLM, etc.)',
     baseUrl: '',  // user sets this
     format: 'openai',
+  // baseUrl definido pelo utilizador: nao se pode afirmar o que suporta
+    supportsTools: false,
     models: [],
     defaultModel: '',
     maxTokens: 4096,
@@ -343,18 +353,23 @@ async function callCustomProvider(userId, messages, options = {}) {
   const temperature = options.temperature ?? 0.7;
   const model = options.model || config.model;
 
+  // As ferramentas TÊM de viajar até aqui. Sem esta linha, quem configurava um
+  // fornecedor pessoal ficava com um modelo melhor e menos capacidades: o
+  // ciclo de ferramentas mandava-as, este ficheiro deitava-as fora, e o modelo
+  // respondia texto solto sem ninguém perceber porquê.
+  const tools = Array.isArray(options.tools) && options.tools.length ? options.tools : null;
+  const opts = { model, maxTokens, temperature, tools };
+
   try {
     let result;
 
     switch (config.format) {
-      case 'openai':
-        result = await callOpenAIFormat(config, messages, { model, maxTokens, temperature });
-        break;
       case 'anthropic':
-        result = await callAnthropicFormat(config, messages, { model, maxTokens, temperature });
+        result = await callAnthropicFormat(config, messages, opts);
         break;
+      case 'openai':
       default:
-        result = await callOpenAIFormat(config, messages, { model, maxTokens, temperature });
+        result = await callOpenAIFormat(config, messages, opts);
     }
 
     // Registar uso
@@ -386,16 +401,20 @@ async function callOpenAIFormat(config, messages, opts) {
     headers['X-Title'] = 'NEXO';
   }
 
+  const corpo = {
+    model: opts.model,
+    messages,
+    max_tokens: opts.maxTokens,
+    temperature: opts.temperature,
+    top_p: 0.9
+  };
+
+  if (opts.tools) corpo.tools = opts.tools;
+
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({
-      model: opts.model,
-      messages,
-      max_tokens: opts.maxTokens,
-      temperature: opts.temperature,
-      top_p: 0.9
-    })
+    body: JSON.stringify(corpo)
   });
 
   if (!response.ok) {
@@ -404,12 +423,24 @@ async function callOpenAIFormat(config, messages, opts) {
   }
 
   const data = await response.json();
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error(`${config.providerName}: resposta vazia`);
+  const mensagem = data.choices?.[0]?.message || {};
+  const text = mensagem.content;
+  const toolCalls = Array.isArray(mensagem.tool_calls) && mensagem.tool_calls.length
+    ? mensagem.tool_calls
+    : null;
+
+  // Uma resposta só com chamadas de ferramentas NÃO tem texto, e isso é
+  // normal. Tratá-la como vazia era o que fazia o ciclo desistir logo à
+  // primeira volta.
+  if (!text && !toolCalls) throw new Error(`${config.providerName}: resposta vazia`);
 
   return {
     success: true,
-    text,
+    text: text || '',
+    toolCalls,
+    // O turno do assistente tal como veio, para o histórico não perder o fio
+    // entre a chamada e o resultado da ferramenta.
+    raw: toolCalls ? mensagem : undefined,
     provider: config.providerName,
     model: opts.model,
     tokens: data.usage || {},
@@ -421,45 +452,21 @@ async function callOpenAIFormat(config, messages, opts) {
  * Chamada formato Anthropic (Claude)
  */
 async function callAnthropicFormat(config, messages, opts) {
-  // Separar system message
-  const systemMsg = messages.find(m => m.role === 'system')?.content || '';
-  const chatMessages = messages
-    .filter(m => m.role !== 'system')
-    .map(m => ({ role: m.role, content: m.content }));
+  // Delegar no adaptador do nexo/, que já sabe traduzir ferramentas, agrupar
+  // resultados no mesmo turno e ler blocos de texto que não venham em
+  // primeiro lugar. A versão anterior lia data.content[0].text e devolvia
+  // vazio sempre que o modelo começasse por raciocinar ou por chamar uma
+  // ferramenta — que é precisamente o caso interessante.
+  const anthropic = require('../nexo/adapters/anthropic');
 
-  const response = await fetch(`${config.baseUrl}/messages`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': config.apiKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: opts.model,
-      max_tokens: opts.maxTokens,
-      temperature: opts.temperature,
-      system: systemMsg,
-      messages: chatMessages
-    })
-  });
+  const resultado = await anthropic.conversar(
+    { baseUrl: config.baseUrl, model: opts.model, maxTokens: opts.maxTokens },
+    config.apiKey,
+    messages,
+    { model: opts.model, maxTokens: opts.maxTokens, temperature: opts.temperature, tools: opts.tools }
+  );
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Anthropic ${response.status}: ${errText.substring(0, 300)}`);
-  }
-
-  const data = await response.json();
-  const text = data.content?.[0]?.text;
-  if (!text) throw new Error('Anthropic: resposta vazia');
-
-  return {
-    success: true,
-    text,
-    provider: 'Anthropic Claude',
-    model: opts.model,
-    tokens: data.usage || {},
-    custom: true
-  };
+  return { ...resultado, provider: config.providerName || 'Anthropic Claude', custom: true };
 }
 
 /**
@@ -741,6 +748,20 @@ function getProviderCatalog(providerId) {
 /**
  * Verifica se um utilizador tem um provider personalizado ativo
  */
+/**
+ * O fornecedor pessoal deste utilizador sabe usar ferramentas?
+ *
+ * Um "não sei" conta como não: mandar ferramentas a quem não as entende faz
+ * o modelo ignorá-las em silêncio e responder texto solto, que é pior do que
+ * não as ter — porque parece que funcionou.
+ */
+function supportsTools(userId) {
+  const config = getUserProvider(userId);
+  if (!config) return false;
+  const catalogo = PROVIDER_CATALOG[config.providerId];
+  return catalogo ? catalogo.supportsTools === true : false;
+}
+
 function hasCustomProvider(userId) {
   const config = userProviders[userId];
   return !!(config && config.enabled);
@@ -867,6 +888,7 @@ module.exports = {
   getProviderInfo,
   getProviderCatalog,
   hasCustomProvider,
+  supportsTools,
   getOnboardingMessage,
   parseSetupFromText,
   trackUsage,

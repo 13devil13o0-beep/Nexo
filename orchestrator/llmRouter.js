@@ -329,8 +329,19 @@ async function chat(messages, options = {}) {
 async function chatInternal(messages, options = {}) {
   const customFirst = customGoesFirst(options);
 
+  // Com ferramentas em jogo, o fornecedor pessoal só entra se as souber usar.
+  // Sem esta verificação, quem tinha um fornecedor pessoal sem suporte perdia
+  // a cascata inteira: as ferramentas eram enviadas, ignoradas em silêncio, e
+  // a resposta vinha em texto como se nada faltasse.
+  const querFerramentas = Array.isArray(options.tools) && options.tools.length > 0;
+  const customServe = !querFerramentas || customProvider.supportsTools(options.userId);
+
+  if (querFerramentas && customFirst && !customServe) {
+    console.log('  ↪️ O fornecedor pessoal não sabe usar ferramentas: a usar a cadeia interna.');
+  }
+
   // ══ NÍVEL PAGO À FRENTE — só quando a política ou quem chama o pedem ══
-  if (customFirst) {
+  if (customFirst && customServe) {
     const paid = await tryCustomProvider(messages, options);
     if (paid) return paid;
     console.warn('  ⚠️ Provider personalizado falhou, a usar a cadeia gratuita...');
@@ -373,7 +384,7 @@ async function chatInternal(messages, options = {}) {
   }
 
   // ══ ÚLTIMO RECURSO: escalar para o nível pago ══
-  if (!customFirst && hasCustomTier(options)) {
+  if (!customFirst && customServe && hasCustomTier(options)) {
     console.warn('  💳 Cadeia gratuita esgotada, a escalar para o provider pago...');
     const paid = await tryCustomProvider(messages, options);
     if (paid) return paid;

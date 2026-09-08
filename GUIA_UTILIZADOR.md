@@ -26,32 +26,49 @@
 - **Node.js 18+** → [nodejs.org](https://nodejs.org)
 - **Git** → [git-scm.com](https://git-scm.com)
 
-### 3 Passos para Começar
+### 2 Passos para Começar
 
 ```bash
-# 1. Clonar e instalar
+# 1. Trazer o NEXO e deixá-lo pronto
 git clone https://github.com/13devil13o0-beep/Nexo.git
-cd NEXO
-npm install
+cd Nexo
+npm run instalar
 
-# 2. Configurar (assistente interativo)
-npm run setup
-#    → Pede a GROQ_API_KEY (gratuita em console.groq.com/keys)
-
-# 3. Iniciar
-npm run dev
+# 2. Iniciar
+npm start
 ```
 
-Pronto! O NEXO abre como app desktop + servidor API na porta 7777.
+O `npm run instalar` é um assistente guiado que trata de tudo: confirma a
+versão do Node, descarrega **só** as bibliotecas que este computador precisa e
+ajuda-te a escolher o motor de IA.
 
-#### Obter API Key Gratuita (30 segundos)
+A primeira pergunta é a que decide o resto:
+
+> *Utilizas alguma IA pessoal contratada que queiras usar com o NEXO?*
+
+| Resposta | O que acontece |
+|----------|----------------|
+| **Não** — quero as gratuitas | Guia-te pelo **Groq** e pelo **Cerebras**. Ambos grátis, rápidos, prontos em dois cliques. Ficas com dois porque se um atinge o limite diário, o NEXO passa ao outro sozinho. |
+| **Sim**, já pago por uma IA | Usas a tua chave (OpenAI, Claude, Gemini) e ela passa a ser a primeira da cadeia. |
+| **Local**, sem internet | Usa o [Ollama](https://ollama.com/download): grátis, sem conta, sem ligação, e **nada do que escreves sai do teu computador**. |
+
+Cada chave é testada contra o fornecedor **antes** de ser gravada — não acabas
+a instalação convencido de que está tudo bem para só descobrires na primeira
+frase que não estava.
+
+> **Já instalado e alguma coisa deixou de funcionar?** `npm run diagnostico`
+> diz o que falta e como se resolve. Também apanha nomes de variáveis escritos
+> por pouco — um `CEREBRAS_APY_KEY` em vez de `CEREBRAS_API_KEY` comporta-se
+> exactamente como se a chave não existisse.
+
+#### Obter a chave gratuita do Groq (30 segundos)
 
 1. Abre [console.groq.com/keys](https://console.groq.com/keys)
 2. Cria conta (email ou Google)
 3. Clica **"Create API Key"** → copia
-4. Cola no wizard `npm run setup` ou no ficheiro `.env`
+4. Cola quando o `npm run instalar` pedir
 
-> **Custo:** 0€ — Groq oferece **14.400 pedidos/dia** grátis com o modelo LLaMA 3.3 70B.
+> **Custo:** 0€ — o Groq oferece **14.400 pedidos/dia** grátis.
 
 ---
 
@@ -72,6 +89,27 @@ O NEXO é **o mesmo cérebro** acessível de 6 formas diferentes:
 # Iniciar TUDO de uma vez
 npm run dev:all
 ```
+
+### O NEXO escolhe o modo sozinho
+
+`npm start` olha para o aparelho antes de arrancar e escolhe entre quatro
+perfis. Não tens de saber qual — mas podes forçar:
+
+| Perfil | Quando arranca assim | O que corre |
+|--------|----------------------|-------------|
+| 🖥️ **Completo** | ecrã e memória folgada | janela própria, bandeja, atalhos globais |
+| 📱 **Leve** | ecrã pequeno ou pouca memória | só o motor; a página abre no browser, mais leve |
+| ⌨️ **Consola** | sessão SSH, sem ambiente gráfico | a REPL do terminal, com o motor por trás |
+| ⚙️ **Serviço** | servidor, contentor, sem terminal | só o motor, sem janela nenhuma |
+
+```bash
+npm run dispositivo          # ver o que detectou, sem arrancar nada
+npm start -- --modo=servico  # forçar um perfil
+```
+
+A escolha manual fica guardada e ganha sempre à detecção automática. No modo
+serviço a chave de API passa a ser obrigatória: sem janela, nada denuncia que
+o servidor ficou aberto na rede.
 
 ### Distribuição .exe (Windows)
 
@@ -218,6 +256,68 @@ Acede a **`/dashboard`** no browser para monitorizar o sistema:
 | Criar workflows | *"Cria workflow de deploy"* |
 | Clipboard histórico | *"Mostra histórico do clipboard"* |
 | Pesquisa no clipboard | *"Pesquisa 'URL' no clipboard"* |
+
+---
+
+### 🔧 Nível 13 — Ferramentas escolhidas pela própria IA
+
+Antes, o que o parser de regras não reconhecesse caía em conversa genérica —
+mesmo havendo um agente capaz de resolver. Agora há um nível intermédio: o
+modelo recebe um punhado de ferramentas escolhidas pelas palavras da tua
+mensagem, decide se precisa de alguma, e o NEXO executa-a e devolve-lhe o
+resultado.
+
+Não tens de fazer nada para isto acontecer. Notas-o em perguntas que antes
+davam respostas vagas:
+
+- *"quanto é 17% de 4.320?"* → executa o cálculo em vez de estimar
+- *"o que está no meu ecrã?"* → captura e analisa
+- *"que ficheiros mexi hoje?"* → vai ver
+
+**Cada ferramenta declara a sua classe de risco**, e é isso que decide se corre
+sem perguntar:
+
+| Classe | O que faz | Precisa de autorização? |
+|--------|-----------|-------------------------|
+| `ler` | pesquisa, ficheiros, estado do sistema | não |
+| `escrever` | cria notas, PDFs, dentro do projecto | não (registado) |
+| `sistema` | controla a máquina: ecrã, apps, comandos | **sim, uma vez por ferramenta** |
+
+```
+👤 Tu: que erro está no meu ecrã?
+🤖 NEXO: 🔒 A ferramenta "analisar_ecra" controla o teu sistema e precisa
+         de autorização. Diz "permite analisar_ecra" para autorizar.
+
+👤 Tu: permite analisar_ecra
+🤖 NEXO: ✅ Autorizada.
+```
+
+Para veres o que já autorizaste: *"que permissões tenho dadas?"*
+
+---
+
+### 🧭 Nível 14 — Missões para aparelhos que se movem
+
+O NEXO pode servir de **cérebro de missão** a um drone ou robô: planeia a rota,
+contorna zonas proibidas e, se o destino ficar inacessível, escolhe um plano B
+que cumpra o **mesmo propósito** em vez de desistir.
+
+```bash
+npm run missao    # demonstração completa, num aparelho simulado
+```
+
+Ou pelo chat:
+
+```
+👤 Tu: planeia uma rota de 40.15,-8.65 até 40.18,-8.68 evitando o
+       aeródromo em 40.166,-8.667 raio 400
+🤖 NEXO: 🧭 Rota planeada — 4,3 km, ~6 min, contorna o aeródromo
+```
+
+> ⚠️ **O NEXO decide missão, não voo.** Quem estabiliza o aparelho e desvia de
+> obstáculos é o piloto automático dele. E só vem incluído um aparelho
+> **simulado**: comandar hardware real exige escrever um adaptador e autorizá-lo
+> explicitamente em código. Voo autónomo é regulado pela ANAC/EASA.
 
 ---
 

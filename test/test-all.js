@@ -2156,6 +2156,111 @@ describe('🩹 Diagnóstico de instalação', () => {
 
 
 // ═══════════════════════════════════════════════════════════
+// FERRAMENTAS NOS FORNECEDORES PESSOAIS
+// Quem configurava o Claude perdia a cascata inteira, em silêncio.
+// ═══════════════════════════════════════════════════════════
+
+describe('🔧 Ferramentas nos fornecedores pessoais', () => {
+  const customProvider = require('../agents/customProvider');
+  const providers = require('../nexo/providers');
+
+  test('cada fornecedor do catálogo declara se sabe usar ferramentas', () => {
+    for (const [id, c] of Object.entries(customProvider.PROVIDER_CATALOG)) {
+      assertEqual(typeof c.supportsTools, 'boolean', `${id} tem de declarar supportsTools`);
+    }
+  });
+
+  test('os que sabem estão marcados', () => {
+    assertEqual(customProvider.PROVIDER_CATALOG.openai.supportsTools, true);
+    assertEqual(customProvider.PROVIDER_CATALOG.anthropic.supportsTools, true);
+    assertEqual(customProvider.PROVIDER_CATALOG.mistral.supportsTools, true);
+  });
+
+  test('os que não sabem ficam a falso, não a "talvez"', () => {
+    // O Cohere v2 não fala o formato de ferramentas da OpenAI, e o "custom"
+    // aponta para um endereço que o utilizador escolhe: não se pode afirmar.
+    assertEqual(customProvider.PROVIDER_CATALOG.cohere.supportsTools, false);
+    assertEqual(customProvider.PROVIDER_CATALOG.custom.supportsTools, false);
+  });
+
+  test('sem fornecedor pessoal configurado, não há suporte a ferramentas', () => {
+    assertEqual(customProvider.supportsTools('utilizador-que-nao-existe'), false);
+  });
+
+  test('a vista unificada já não mente sobre o catálogo pessoal', () => {
+    const lista = providers.listar();
+    const pessoais = lista.filter(p => p.origem === 'pessoal');
+
+    assert(pessoais.length > 0, 'devia haver fornecedores pessoais');
+    assert(
+      pessoais.some(p => p.capacidades.ferramentas),
+      'antes desta correcção NENHUM declarava ferramentas, o que era falso'
+    );
+    assert(
+      pessoais.some(p => !p.capacidades.ferramentas),
+      'e nem todos sabem: quem não sabe continua a dizer que não'
+    );
+  });
+
+  test('o Claude pessoal passa a contar como capaz de ferramentas', () => {
+    const claude = providers.listar().find(p => p.origem === 'pessoal' && p.id === 'anthropic');
+    assert(claude, 'o Claude devia estar no catálogo pessoal');
+    assertEqual(claude.capacidades.ferramentas, true);
+  });
+});
+
+
+describe('🔤 Nomes de variáveis escritos por pouco', () => {
+  const diagnostico = require('../orchestrator/diagnostico');
+
+  const comEnv = (texto) => diagnostico.detectarNomesTrocados('irrelevante', () => texto);
+
+  test('apanha o caso real: CEREBRAS_APY_KEY', () => {
+    const [t] = comEnv('CEREBRAS_APY_KEY=csk-umachavequalquer\n');
+    assert(t, 'devia apanhar o erro de escrita');
+    assertEqual(t.provavelmente, 'CEREBRAS_API_KEY');
+  });
+
+  test('apanha uma letra em falta no meio', () => {
+    const [t] = comEnv('ANTROPIC_API_KEY=sk-ant-xyz\n');
+    assertEqual(t.provavelmente, 'ANTHROPIC_API_KEY');
+  });
+
+  test('não se queixa de nomes correctos', () => {
+    assertEqual(comEnv('GROQ_API_KEY=gsk_boa\nPORT=7777\n').length, 0);
+  });
+
+  test('ignora comentários e linhas vazias', () => {
+    assertEqual(comEnv('# CEREBRAS_APY_KEY=nao conta\n\n').length, 0);
+  });
+
+  test('ignora uma linha sem valor', () => {
+    // Uma variável por preencher não é um erro de escrita.
+    assertEqual(comEnv('CEREBRAS_APY_KEY=\n').length, 0);
+  });
+
+  test('não confunde nomes genuinamente diferentes', () => {
+    assertEqual(comEnv('MINHA_VARIAVEL_QUALQUER=abc\n').length, 0);
+  });
+
+  test('um nome trocado impede o arranque limpo e explica-se', () => {
+    const d = diagnostico.diagnosticar({
+      versaoNode: '20.0.0',
+      env: { GROQ_API_KEY: 'gsk_chavelongaboa123' },
+      raiz: 'C:/fake',
+      existe: () => true,
+      nomesTrocados: [{ escrito: 'CEREBRAS_APY_KEY', provavelmente: 'CEREBRAS_API_KEY' }]
+    });
+
+    const p = d.problemas.find(x => x.id === 'nome-trocado');
+    assert(p, 'devia acusar o nome trocado');
+    assertIncludes(p.humano, 'CEREBRAS_API_KEY');
+    assertEqual(p.podeSerAutomatico, true);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
 // RESULTADO FINAL
 // ═══════════════════════════════════════════════════════════
 
