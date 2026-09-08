@@ -38,13 +38,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # O "--publish never" nao e opcional: o electron-builder, ao ver um
+          # build de CI numa etiqueta, tenta publicar sozinho e morre por nao
+          # ter GH_TOKEN. Quem publica e o passo explicito la em baixo, para a
+          # decisao de o que vai para a Release estar num sitio so.
           - os: windows-latest
             nome: Windows
-            comando: npm run dist:win
+            comando: npm run dist:win -- --publish never
             ficheiros: dist/*.exe
           - os: ubuntu-latest
             nome: Linux
-            comando: npm run dist:linux
+            comando: npm run dist:linux -- --publish never
             ficheiros: |
               dist/*.AppImage
               dist/*.deb
