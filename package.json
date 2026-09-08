@@ -120,7 +120,9 @@
         "portable"
       ],
       "icon": "assets/icon.ico",
-      "publisherName": "NjoY MassagXprs"
+      "signtoolOptions": {
+        "publisherName": "NjoY MassagXprs"
+      }
     },
     "nsis": {
       "oneClick": false,
