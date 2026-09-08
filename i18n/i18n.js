@@ -1,5 +1,5 @@
 /**
- * 🌍 i18n — Sistema de Internacionalização do MyAssistBOT
+ * 🌍 i18n — Sistema de Internacionalização do NEXO
  * 
  * Auto-deteta a língua do sistema e permite preferência por utilizador.
  * Fallback chain: Preferência do user → Locale do SO → Português (default)
@@ -178,6 +178,7 @@ function normalizeLangCode(input) {
     // Português
     'pt': 'pt', 'português': 'pt', 'portugues': 'pt', 'portuguese': 'pt',
     'pt-br': 'pt', 'pt-pt': 'pt', 'brasil': 'pt', 'brazil': 'pt',
+    'portugais': 'pt', 'portugués': 'pt',
     // English
     'en': 'en', 'english': 'en', 'inglês': 'en', 'ingles': 'en',
     'en-us': 'en', 'en-gb': 'en', 'anglais': 'en', 'inglés': 'en',

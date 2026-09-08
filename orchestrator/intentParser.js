@@ -5,6 +5,39 @@
  */
 
 /**
+ * Tokens de língua reconhecidos (nomes + códigos ISO).
+ * Uma mudança de idioma só é detectada quando o texto nomeia uma língua
+ * real — evita que "usa o browser" ou "quero um café" sejam lidos como
+ * pedidos de mudança de língua.
+ */
+const LANG_TOKEN = '(?:portugu[eê]s|portuguese|portugais|pt-?(?:br|pt)?|pt|' +
+  'ingl[eê]s|ingl[eé]s|english|anglais|en-?(?:us|gb)?|en|' +
+  'espanhol|espa[nñ]ol|spanish|espagnol|cast[eé]lhano|castellano|es|' +
+  'franc[eê]s|francais|fran[cç]ais|french|fr)';
+
+/** Nomes de língua por extenso (sem os códigos de duas letras) */
+const LANG_NAME = '(?:portugu[eê]s|portuguese|portugais|' +
+  'ingl[eê]s|ingl[eé]s|english|anglais|' +
+  'espanhol|espa[nñ]ol|spanish|espagnol|cast[eé]lhano|castellano|' +
+  'franc[eê]s|francais|fran[cç]ais|french)';
+
+const RE_LANG_ANYWHERE = new RegExp('\\b' + LANG_TOKEN + '\\b', 'i');
+
+/**
+ * Extrai a língua nomeada num texto.
+ * Prefere o nome por extenso ao código de duas letras (em "langue en anglais"
+ * o "en" é uma preposição, não a língua) e, havendo vários, fica com o último
+ * ("muda de inglês para português" → português).
+ */
+function extractLanguage(text) {
+  const all = String(text || '').match(new RegExp('\\b' + LANG_TOKEN + '\\b', 'gi')) || [];
+  if (all.length === 0) return null;
+  const byName = new RegExp('^' + LANG_NAME + '$', 'i');
+  const names = all.filter(w => byName.test(w));
+  return (names.length ? names[names.length - 1] : all[all.length - 1]).trim();
+}
+
+/**
  * Padrões de intenção
  */
 const INTENT_PATTERNS = {
@@ -82,11 +115,15 @@ const INTENT_PATTERNS = {
   },
   
   agents_list: {
+    // "lista os agentes" não casava por causa do artigo, e caía no ciclo de
+    // ferramentas: 2 s e uma chamada a modelo para o que custa 14 ms aqui.
     patterns: [
       /\/agents/,
-      /listar?\s+agentes/i,
-      /quais?\s+agentes/i,
-      /agentes\s+disponíveis/i
+      /list(?:a|ar|agem)?\s+(?:d[eo]s?\s+|os\s+|todos\s+os\s+)?agentes/i,
+      /quais?\s+(?:sao\s+)?(?:os\s+)?agentes/i,
+      /que\s+agentes/i,
+      /agentes\s+dispon[ií]veis/i,
+      /^\s*agentes\s*[?!.]*\s*$/i
     ],
     extract: () => ({})
   },
@@ -371,13 +408,26 @@ const INTENT_PATTERNS = {
   
   input_type: {
     patterns: [
-      /(?:digita|escreve|type)(?:r)?\s+["']?(.+?)["']?$/i,
-      /digit[ae]\s+(?:o\s+)?texto\s+["']?(.+?)["']?$/i,
-      /escreve(?:r)?\s+["']?(.+?)["']?$/i
+      // A forma mais específica primeiro, senão a genérica engole o "texto".
+      /digit[ae]r?\s*:?\s*(?:o\s+)?texto\s+["']?(.+?)["']?$/i,
+      // "digita" e "type" só se usam para teclado: não são ambíguos.
+      /(?:digita|digitar|type)\s*:?\s+["']?(.+?)["']?$/i,
+      // "escreve" também significa redigir. Exige marca explícita de teclado,
+      // dois pontos ou aspas. Sem isto, "escreve um resumo sobre X" era
+      // digitado na janela com foco em vez de ser respondido.
+      /escrever?\s*:\s*(.+)$/i,
+      /escrever?\s+["'](.+?)["']\s*$/i
     ],
     extract: (text) => {
-      const match = text.match(/(?:digita|escreve|type|texto)\s+["']?(.+?)["']?$/i);
-      return { text: match?.[1] || '' };
+      const marcado = text.match(/escrever?\s*:\s*(.+)$/i)
+                   || text.match(/escrever?\s+["'](.+?)["']\s*$/i);
+      if (marcado) return { text: marcado[1] };
+
+      const comTexto = text.match(/digit[ae]r?\s*:?\s*(?:o\s+)?texto\s+["']?(.+?)["']?$/i);
+      if (comTexto) return { text: comTexto[1] };
+
+      const direto = text.match(/(?:digita|digitar|type)\s*:?\s+["']?(.+?)["']?$/i);
+      return { text: direto?.[1] || '' };
     }
   },
   
@@ -721,12 +771,19 @@ const INTENT_PATTERNS = {
   // ═══════════════════════════════════════════════════════════
 
   remember: {
+    // Uma ordem de memorização vem sempre no início da mensagem. Sem âncora,
+    // qualquer frase que contivesse "guarda" era memorizada: a pergunta
+    // "onde se guarda roupa num quarto?" ia parar à memória em vez de
+    // receber resposta. O complemento também passou a ser obrigatório.
     patterns: [
-      /lembra[\s-]*te\s+(?:que|de que|disso:?)\s*/i,
-      /(?:memoriza|guarda|grava|regista)(?:r)?\s+(?:que|isso|isto)?\s*/i,
-      /(?:anota|aponta|nota|toma\s+nota)(?:r?)?\s*:?\s*/i,
-      /remember\s+(?:that|this)?\s*/i,
-      /(?:não\s+)?(?:te\s+)?esqueças?\s+(?:que|de\s+que)\s*/i
+      /^\s*lembra[\s-]*te\s+(?:que|de\s+que|disso)\b/i,
+      /^\s*(?:memoriza|guarda|grava|regista)r?\s*[:,]/i,
+      /^\s*(?:memoriza|guarda|grava|regista)r?\s+(?:que|isso|isto)\b/i,
+      /^\s*(?:anota|aponta|nota|toma\s+nota)r?\s*[:,]/i,
+      /^\s*(?:anota|aponta|toma\s+nota)r?\s+(?:que|isso|isto)\b/i,
+      /^\s*remember\s+(?:that|this)\b/i,
+      // Tolera escrita sem acentos, comum em telemóvel: "nao te esquecas".
+      /^\s*(?:n[ãa]o\s+)?(?:te\s+)?esque[çc]as?\s+(?:que|de\s+que)\b/i
     ],
     extract: (text) => ({ text })
   },
@@ -1151,34 +1208,59 @@ const INTENT_PATTERNS = {
 
   change_language: {
     patterns: [
-      /(?:mudar?|alterar?|trocar?|definir?)\s+(?:o?\s*)?(?:idioma|l[ií]ngua)\s+(?:para\s+)?(\w+)/i,
-      /(?:change|switch|set)\s+(?:the?\s*)?language?\s+(?:to\s+)?(\w+)/i,
-      /(?:cambiar?|poner?)\s+(?:el?\s*)?idioma\s+(?:a|en|para)\s+(\w+)/i,
-      /(?:changer?|mettre?)\s+(?:la?\s*)?langue?\s+(?:en|à|pour)\s+(\w+)/i,
-      /(?:quero|want|je\s+veux|desejo)\s+(?:em\s+|in\s+|en\s+)?(\w+)/i,
-      /(?:fala|speak|parle|habla)\s+(?:em\s+|in\s+|en\s+)?(\w+)/i,
-      /(?:usa|use|utilise)\s+(?:o?\s*)?(?:idioma\s+)?(\w+)/i,
-      /(?:p[oõ]e|coloca)\s+(?:em\s+)?(\w+)/i
+      new RegExp('(?:mudar?|muda|alterar?|altera|trocar?|troca|definir?|define)\\s+(?:de\\s+|o\\s+|a\\s+)?(?:idioma|l[ií]ngua)\\s+(?:para\\s+|a\\s+|em\\s+)?' + LANG_TOKEN + '\\b', 'i'),
+      new RegExp('(?:change|switch|set)\\s+(?:the\\s+)?language\\s+(?:to\\s+)?' + LANG_TOKEN + '\\b', 'i'),
+      new RegExp('(?:cambiar?|cambia|poner?|pon)\\s+(?:el\\s+)?idioma\\s+(?:a|en|para)\\s+' + LANG_TOKEN + '\\b', 'i'),
+      new RegExp('(?:changer?|mettre?|mets)\\s+(?:la\\s+)?langue\\s+(?:en|à|pour)\\s+' + LANG_TOKEN + '\\b', 'i'),
+      new RegExp('^\\s*(?:mudar?|muda|alterar?|altera|trocar?|troca|passar?|passa|change|switch|cambiar?|cambia)\\s+(?:de\\s+' + LANG_TOKEN + '\\s+|from\\s+' + LANG_TOKEN + '\\s+)?(?:para|to|a|en|à|pour)\\s+' + LANG_TOKEN + '\\b', 'i'),
+      new RegExp('^\\s*(?:fala|falar|responde|responder|escreve|escrever|speak|answer|parle|habla|contesta)\\s+(?:comigo\\s+|-me\\s+|me\\s+)?(?:em|in|en)\\s+' + LANG_TOKEN + '\\b', 'i'),
+      new RegExp('^\\s*(?:quero|queria|gostava|desejo|prefiro|want|je\\s+veux)\\s+(?:falar\\s+|responder\\s+|tudo\\s+)?(?:em|in|en)\\s+' + LANG_TOKEN + '\\b', 'i'),
+      new RegExp('^\\s*(?:p[oõ]e|coloca|passa|usa|use|utiliza)\\s+(?:tudo\\s+)?(?:em|o\\s+idioma)\\s+' + LANG_TOKEN + '\\b', 'i'),
+      new RegExp('^\\s*' + LANG_NAME + '\\s*[?!.]*\\s*$', 'i')
     ],
     extract: (text) => {
-      const match = text.match(/(?:para|to|a|en|à|pour|em|in)\s+(\w+)\s*$/i) ||
-                     text.match(/(?:fala|speak|parle|habla)\s+(?:em\s+|in\s+|en\s+)?(\w+)/i) ||
-                     text.match(/(?:usa|use|utilise)\s+(?:o?\s*)?(?:idioma\s+)?(\w+)/i) ||
-                     text.match(/(\w+)\s*$/i);
-      return { language: match?.[1]?.trim() || '' };
+      return { language: extractLanguage(text) || '' };
     }
   },
 
   list_languages: {
     patterns: [
-      /(?:que|quais)\s+(?:idiomas?|l[ií]nguas?)\s+(?:suportas?|tens?|h[aá]|existem?|dispon[ií]veis?)/i,
-      /(?:idiomas?|l[ií]nguas?)\s+(?:dispon[ií]veis?|suportad[ao]s?)/i,
+      /(?:que|quais|quantos)\s+(?:s[ãa]o\s+)?(?:os\s+)?(?:idiomas?|l[íi]nguas?)\s+(?:que\s+)?(?:suportas?|tens?|falas?|h[aá]|existem?|dispon[íi]veis?)/i,
+      /(?:idiomas?|l[íi]nguas?)\s+(?:dispon[íi]veis?|suportad[ao]s?)/i,
       /(?:what|which)\s+languages?\s+(?:do\s+you\s+)?(?:support|have|speak)/i,
       /(?:available|supported)\s+languages?/i,
-      /(?:list|show|ver|listar?|mostrar?)\s+(?:os?\s*)?(?:idiomas?|l[ií]nguas?)/i,
-      /(?:qu[ée]\s+)?idiomas?/i,
-      /(?:quelles?|quels?)\s+langues?/i,
+      /^\s*(?:list|show|ver|listar?|mostrar?)\s+(?:os?\s+|as\s+)?(?:idiomas?|l[íi]nguas?|languages?)\b/i,
+      /^\s*(?:idiomas?|l[íi]nguas?|languages?|langues?)\s*[?!.]*\s*$/i,
+      /(?:quelles?|quels?)\s+langues?\s+(?:parles?|supportes?|disponibles?)/i,
       /(?:qu[ée]\s+)?idiomas?\s+(?:soportas?|tienes?|hay)/i
+    ],
+    extract: () => ({})
+  },
+
+  // ── Permissões de ferramentas ──────────────────────────────
+  grant_permission: {
+    patterns: [
+      /^\s*(?:permite|permitir|autoriza|autorizar|aprova|aprovar)\s+(?:a\s+ferramenta\s+)?([a-z_]+)/i
+    ],
+    extract: (text) => {
+      const m = text.match(/(?:permite|permitir|autoriza|autorizar|aprova|aprovar)\s+(?:a\s+ferramenta\s+)?([a-z_]+)/i);
+      return { tool: m?.[1] || '' };
+    }
+  },
+  revoke_permission: {
+    patterns: [
+      /^\s*(?:revoga|revogar|retira|nega|negar|proibe|proibir)\s+(?:a\s+ferramenta\s+)?([a-z_]+)/i
+    ],
+    extract: (text) => {
+      const m = text.match(/(?:revoga|revogar|retira|nega|negar|proibe|proibir)\s+(?:a\s+ferramenta\s+)?([a-z_]+)/i);
+      return { tool: m?.[1] || '' };
+    }
+  },
+  list_permissions: {
+    patterns: [
+      /(?:que|quais)\s+permiss[õo]es/i,
+      /^\s*permiss[õo]es\s*[?!.]*\s*$/i,
+      /ferramentas?\s+(?:aprovadas?|autorizadas?|permitidas?)/i
     ],
     extract: () => ({})
   }
@@ -1221,14 +1303,18 @@ function parseIntent(message) {
   }
 
   // Prioridade: mudar idioma / change language
-  if (/(?:mudar?|alterar?|trocar?|definir?|change|switch|set|cambiar?|changer?)\s+.*(?:idioma|l[ií]ngua|language|langue)/i.test(text) ||
-      /(?:idioma|l[ií]ngua|language|langue)\s+(?:para|to|a|en|à)\s+/i.test(text) ||
-      /(?:fala|speak|parle|habla)\s+(?:em\s+|in\s+|en\s+)?\w+/i.test(text) ||
-      /(?:mudar?|alterar?|trocar?|cambiar?|change|switch)\s+(?:para|to|a|en|à)\s+(?:portugu[eê]s|ingl[eê]s|english|espanhol|espa[nñ]ol|franc[eê]s|fran[cç]ais)/i.test(text)) {
-    const langMatch = text.match(/(?:para|to|a|en|à|pour|em|in)\s+(\S+)\s*$/i) ||
-                      text.match(/(?:fala|speak|parle|habla)\s+(?:em\s+|in\s+|en\s+)?(\S+)/i);
-    if (langMatch) {
-      return { intent: 'change_language', entities: { language: langMatch[1].trim() }, confidence: 0.95 };
+  // Exige que uma língua real seja nomeada — "no idioma em que perguntares"
+  // ou "fala comigo sobre X" continuam a ser conversa normal.
+  const RE_CHANGE_LANG_VERB = new RegExp('(?:mudar?|muda|alterar?|altera|trocar?|troca|definir?|define|change|switch|set|cambiar?|cambia|changer?|mets)\\s+(?:de\\s+|o\\s+|a\\s+|el\\s+|la\\s+|the\\s+)?(?:idioma|l[íi]ngua|language|langue)\\s+(?:para\\s+|to\\s+|a\\s+|en\\s+|à\\s+|pour\\s+)?' + LANG_TOKEN + '\\b', 'i');
+  const RE_LANG_TO = new RegExp('(?:idioma|l[íi]ngua|language|langue)\\s+(?:para|to|a|en|à|pour)\\s+' + LANG_TOKEN + '\\b', 'i');
+  const RE_SPEAK_LANG = new RegExp('^\\s*(?:fala|falar|responde|responder|escreve|speak|answer|parle|habla|contesta)\\s+(?:comigo\\s+|-me\\s+|me\\s+)?(?:em|in|en)\\s+' + LANG_TOKEN + '\\b', 'i');
+  const RE_SWITCH_TO_LANG = new RegExp('^\\s*(?:mudar?|muda|alterar?|altera|trocar?|troca|passar?|passa|cambiar?|cambia|change|switch)\\s+(?:de\\s+' + LANG_TOKEN + '\\s+|from\\s+' + LANG_TOKEN + '\\s+)?(?:para|to|a|en|à|pour)\\s+' + LANG_TOKEN + '\\b', 'i');
+
+  if (RE_CHANGE_LANG_VERB.test(text) || RE_LANG_TO.test(text) ||
+      RE_SPEAK_LANG.test(text) || RE_SWITCH_TO_LANG.test(text)) {
+    const lang = extractLanguage(text);
+    if (lang) {
+      return { intent: 'change_language', entities: { language: lang }, confidence: 0.95 };
     }
   }
 
