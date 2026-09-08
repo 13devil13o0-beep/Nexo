@@ -17,7 +17,7 @@ const path = require('path');
 //  CONSTANTES
 // ═══════════════════════════════════════════════════════════
 
-const CFN_TEMPLATE_URL = 'https://raw.githubusercontent.com/13devil13o0-beep/Nexo-/main/deploy/aws-cloudformation.yaml';
+const CFN_TEMPLATE_URL = 'https://raw.githubusercontent.com/13devil13o0-beep/Nexo/main/deploy/aws-cloudformation.yaml';
 
 const REGIONS = {
   'eu-west-1': 'EU (Ireland)',
@@ -353,7 +353,7 @@ if [ -d "\$INSTALL_DIR" ]; then
   cd "\$INSTALL_DIR"
   git pull origin main
 else
-  git clone https://github.com/13devil13o0-beep/Nexo-.git "\$INSTALL_DIR"
+  git clone https://github.com/13devil13o0-beep/Nexo.git "\$INSTALL_DIR"
   cd "\$INSTALL_DIR"
 fi
 

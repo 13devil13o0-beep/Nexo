@@ -30,7 +30,7 @@
 
 ```bash
 # 1. Clonar e instalar
-git clone https://github.com/13devil13o0-beep/Nexo-.git
+git clone https://github.com/13devil13o0-beep/Nexo.git
 cd NEXO
 npm install
 

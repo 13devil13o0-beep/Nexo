@@ -947,9 +947,9 @@ ssh -i "tua-key.pem" ubuntu@IP_DA_INSTANCIA
             Clonar e configurar
           </div>
           <div class="code-block">
-git clone https://github.com/13devil13o0-beep/Nexo-.git<br>
-cd Nexo-
-            <button class="copy-btn" onclick="copyText('git clone https://github.com/13devil13o0-beep/Nexo-.git && cd Nexo-')">📋</button>
+git clone https://github.com/13devil13o0-beep/Nexo.git<br>
+cd Nexo
+            <button class="copy-btn" onclick="copyText('git clone https://github.com/13devil13o0-beep/Nexo.git && cd Nexo')">📋</button>
           </div>
         </div>
 
@@ -1146,7 +1146,7 @@ NODE_ENV=production
       const cfg = getConfig();
 
       // CloudFormation URL
-      const cfnTemplateUrl = 'https://raw.githubusercontent.com/13devil13o0-beep/Nexo-/main/deploy/aws-cloudformation.yaml';
+      const cfnTemplateUrl = 'https://raw.githubusercontent.com/13devil13o0-beep/Nexo/main/deploy/aws-cloudformation.yaml';
       const params = [
         `InstanceType=${cfg.instanceType}`,
         `BotPort=${cfg.port}`,
@@ -1181,7 +1181,7 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash -
 sudo apt-get install -y nodejs git
 
 # Clonar
-git clone https://github.com/13devil13o0-beep/Nexo-.git ~/nexo
+git clone https://github.com/13devil13o0-beep/Nexo.git ~/nexo
 cd ~/nexo
 
 # Instalar dependências

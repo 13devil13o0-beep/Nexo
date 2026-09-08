@@ -94,7 +94,7 @@ app.get('/api', (req, res) => {
       'POST /api/deploy/generate-script': 'Gerar script de instalação',
       'GET /setup': 'Wizard de setup AWS'
     },
-    documentation: 'https://github.com/13devil13o0-beep/Nexo-'
+    documentation: 'https://github.com/13devil13o0-beep/Nexo'
   });
 });
 

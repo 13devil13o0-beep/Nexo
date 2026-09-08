@@ -74,7 +74,7 @@ is best suited for each task.
 ## 🚀 Início Rápido
 
 ```bash
-git clone https://github.com/13devil13o0-beep/Nexo-.git
+git clone https://github.com/13devil13o0-beep/Nexo.git
 cd NEXO
 npm install
 npm run setup     # Configura API key gratuita (Groq)
