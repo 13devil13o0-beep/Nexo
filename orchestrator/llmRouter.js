@@ -85,8 +85,11 @@ const PROVIDERS = {
     name: 'Gemini',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     keyEnv: 'GEMINI_API_KEY',
-    model: 'gemini-2.0-flash',
-    fallbackModel: 'gemini-1.5-flash',
+    // Aliases e nao numeros fixos: o gemini-2.0-flash que estava aqui foi
+    // descontinuado pelo Google e o NEXO passou a receber "este modelo ja nao
+    // esta disponivel" com uma chave perfeitamente valida.
+    model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
+    fallbackModel: 'gemini-flash-lite-latest',
     maxTokens: 4096,
     supportsStreaming: true,
     supportsVision: true,

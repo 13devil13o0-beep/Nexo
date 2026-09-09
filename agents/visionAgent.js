@@ -24,6 +24,16 @@ const https = require('https');
 //  CONSTANTES
 // ═══════════════════════════════════════════════════════════
 
+/**
+ * Alias em vez de um numero fixo, de proposito.
+ *
+ * Estava aqui "gemini-2.0-flash" e o Google descontinuou-o: a chave era
+ * valida, a imagem era valida, e o pedido morria a dizer que o modelo ja nao
+ * existe. Um alias -latest nao caduca. O modelo pode mudar por baixo, mas um
+ * modelo diferente e muito melhor do que um modelo que nao existe.
+ */
+const MODELO_GEMINI = process.env.GEMINI_VISION_MODEL || 'gemini-flash-latest';
+
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const SCREENSHOTS_DIR = path.join(TEMP_DIR, 'screenshots');
 
@@ -168,29 +178,45 @@ async function analyzeImage(imagePath, prompt = 'Descreve detalhadamente o que v
     return { success: false, error: `Ficheiro não encontrado: ${imagePath}` };
   }
 
-  try {
-    const base64Image = fs.readFileSync(imagePath).toString('base64');
-    const mimeType = getMimeType(imagePath);
-    const chave = process.env[fornecedor.env];
-
-    let response;
-    if (fornecedor.id === 'gemini') {
-      response = await callGeminiVision(chave, base64Image, mimeType, prompt);
-    } else if (fornecedor.id === 'anthropic') {
-      response = await callAnthropicVision(chave, base64Image, mimeType, prompt);
-    } else {
-      response = await callOpenAIVision(chave, base64Image, mimeType, prompt);
-    }
-
-    return {
-      success: true,
-      analysis: response,
-      imagePath,
-      fornecedor: fornecedor.nome
-    };
-  } catch (err) {
-    return { success: false, error: `Erro na análise (${fornecedor.nome}): ${err.message}` };
+  if (!fs.existsSync(imagePath)) {
+    return { success: false, error: `Ficheiro não encontrado: ${imagePath}` };
   }
+
+  const base64Image = fs.readFileSync(imagePath).toString('base64');
+  const mimeType = getMimeType(imagePath);
+
+  // Tenta cada fornecedor com visão até um responder — a mesma cadeia de
+  // recurso que o llmRouter já usa para texto. Nasceu de um caso real: o
+  // Gemini respondeu "este modelo está com muita procura, tenta mais tarde",
+  // e não faz sentido desistir quando há outro motor configurado ao lado.
+  const candidatos = FORNECEDORES_COM_VISAO.filter(f => {
+    const v = process.env[f.env];
+    return v && v.length > 8;
+  });
+
+  let primeiroErro = null;
+
+  for (const f of candidatos) {
+    try {
+      const chave = process.env[f.env];
+      let response;
+
+      if (f.id === 'gemini') {
+        response = await callGeminiVision(chave, base64Image, mimeType, prompt);
+      } else if (f.id === 'anthropic') {
+        response = await callAnthropicVision(chave, base64Image, mimeType, prompt);
+      } else {
+        response = await callOpenAIVision(chave, base64Image, mimeType, prompt);
+      }
+
+      return { success: true, analysis: response, imagePath, fornecedor: f.nome };
+    } catch (err) {
+      if (!primeiroErro) primeiroErro = `${f.nome}: ${err.message}`;
+      if (candidatos.length > 1) console.warn(`  ⚠️ Visão por ${f.nome} falhou: ${err.message}`);
+    }
+  }
+
+  return { success: false, error: `Erro na análise — ${primeiroErro}` };
 }
 
 /**
@@ -319,7 +345,7 @@ function callGeminiVision(apiKey, base64Image, mimeType, prompt) {
     const options = {
       hostname: 'generativelanguage.googleapis.com',
       port: 443,
-      path: `/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      path: `/v1beta/models/${MODELO_GEMINI}:generateContent?key=${apiKey}`,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
