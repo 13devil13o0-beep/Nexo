@@ -2552,6 +2552,96 @@ describe('🖱️ O atalho: vontade vs realidade', () => {
 
 
 // ═══════════════════════════════════════════════════════════
+// VISÃO — quem sabe ver imagens, e quando é chamado
+// ═══════════════════════════════════════════════════════════
+
+describe('👁️ Visão: escolha de fornecedor', () => {
+  const visionAgent = require('../agents/visionAgent');
+
+  test('não inventa visão quando não há nenhum fornecedor', () => {
+    assertEqual(visionAgent.fornecedorDeVisao({}), null);
+    assertEqual(visionAgent.fornecedorDeVisao({ GROQ_API_KEY: 'gsk_umachavelonga' }), null,
+      'o Groq não vê imagens');
+  });
+
+  test('aceita o Claude, não só o Gemini', () => {
+    // Era este o bug: quem tinha Claude ouvia "não consigo ver imagens".
+    const f = visionAgent.fornecedorDeVisao({ ANTHROPIC_API_KEY: 'sk-ant-umachavelonga123' });
+    assert(f, 'o Claude tem visão e devia ser aceite');
+    assertEqual(f.id, 'anthropic');
+  });
+
+  test('aceita o GPT', () => {
+    const f = visionAgent.fornecedorDeVisao({ OPENAI_API_KEY: 'sk-umachavelonga123' });
+    assertEqual(f.id, 'openai');
+  });
+
+  test('prefere o Gemini quando há mais do que um', () => {
+    // É o gratuito: entre dois que servem, escolhe-se o que não custa.
+    const f = visionAgent.fornecedorDeVisao({
+      ANTHROPIC_API_KEY: 'sk-ant-longa123456',
+      GEMINI_API_KEY: 'AIza-longa123456'
+    });
+    assertEqual(f.id, 'gemini');
+  });
+
+  test('uma chave demasiado curta não conta', () => {
+    assertEqual(visionAgent.fornecedorDeVisao({ GEMINI_API_KEY: 'abc' }), null);
+  });
+
+  test('isAvailable segue os fornecedores, não uma chave em particular', () => {
+    assertEqual(typeof visionAgent.isAvailable(), 'boolean');
+  });
+
+  test('sem fornecedor, o erro diz o que fazer em vez de só recusar', async () => {
+    const original = process.env;
+    // Ambiente sem nenhuma chave de visão.
+    const guardadas = {};
+    for (const f of visionAgent.FORNECEDORES_COM_VISAO) {
+      guardadas[f.env] = process.env[f.env];
+      delete process.env[f.env];
+    }
+
+    try {
+      const r = await visionAgent.analyzeImage('qualquer.png', 'o que é isto?');
+      assertEqual(r.success, false);
+      assertIncludes(r.error, 'aistudio.google.com');
+      assertIncludes(r.error, 'npm run instalar');
+    } finally {
+      for (const [k, v] of Object.entries(guardadas)) {
+        if (v !== undefined) process.env[k] = v;
+      }
+    }
+  });
+});
+
+
+describe('👁️ Visão: o diagnóstico avisa a tempo', () => {
+  const diagnostico = require('../orchestrator/diagnostico');
+
+  const base = {
+    versaoNode: '20.0.0',
+    env: { GROQ_API_KEY: 'gsk_chavelongaboa123', CEREBRAS_API_KEY: 'csk-outralonga' },
+    raiz: 'C:/fake',
+    existe: () => true
+  };
+
+  test('sem motor com visão, avisa e diz onde arranjar um grátis', () => {
+    const d = diagnostico.diagnosticar({ ...base, semVisao: true });
+    const a = d.avisos.find(x => x.id === 'sem-visao');
+    assert(a, 'devia avisar');
+    assertIncludes(a.comoResolver, 'aistudio.google.com');
+    assert(d.pronto, 'não impede o NEXO de funcionar para tudo o resto');
+  });
+
+  test('com visão disponível, não há aviso nenhum', () => {
+    const d = diagnostico.diagnosticar({ ...base, semVisao: false });
+    assert(!d.avisos.some(x => x.id === 'sem-visao'));
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
 // RESULTADO FINAL
 // ═══════════════════════════════════════════════════════════
 

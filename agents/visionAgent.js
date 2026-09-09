@@ -130,14 +130,37 @@ function captureMac(filepath) {
  * @param {string} prompt - O que perguntar sobre a imagem
  * @returns {Promise<{success: boolean, analysis?: string, error?: string}>}
  */
-async function analyzeImage(imagePath, prompt = 'Descreve detalhadamente o que vês nesta imagem.') {
-  const apiKey = process.env.GEMINI_API_KEY;
+/**
+ * Fornecedores que sabem ver imagens, por ordem de preferência.
+ *
+ * Isto era só o Gemini, e a consequência era concreta: quem tivesse o Claude
+ * ou o GPT configurados — ambos com visão — ouvia o NEXO responder que não
+ * conseguia ver imagens. Uma capacidade que existia, recusada por causa da
+ * chave errada.
+ */
+const FORNECEDORES_COM_VISAO = [
+  { id: 'gemini', env: 'GEMINI_API_KEY', nome: 'Gemini' },
+  { id: 'anthropic', env: 'ANTHROPIC_API_KEY', nome: 'Claude' },
+  { id: 'openai', env: 'OPENAI_API_KEY', nome: 'GPT' }
+];
 
-  if (!apiKey) {
+/** O primeiro fornecedor com visão que esteja configurado. */
+function fornecedorDeVisao(env = process.env) {
+  return FORNECEDORES_COM_VISAO.find(f => {
+    const v = env[f.env];
+    return v && v.length > 8;
+  }) || null;
+}
+
+async function analyzeImage(imagePath, prompt = 'Descreve detalhadamente o que vês nesta imagem.') {
+  const fornecedor = fornecedorDeVisao();
+
+  if (!fornecedor) {
     return {
       success: false,
-      error: '⚠️ Vision requer GEMINI_API_KEY configurado (Gemini 2.0 Flash suporta visão).\n' +
-        'Configura em: https://aistudio.google.com/apikey'
+      error: '⚠️ Para ver imagens é preciso um motor de IA com visão.\n' +
+        'Serve qualquer um destes: Gemini (grátis, aistudio.google.com/apikey), ' +
+        'Claude ou GPT. Configura com: npm run instalar'
     };
   }
 
@@ -146,21 +169,91 @@ async function analyzeImage(imagePath, prompt = 'Descreve detalhadamente o que v
   }
 
   try {
-    // Ler imagem como base64
-    const imageData = fs.readFileSync(imagePath);
-    const base64Image = imageData.toString('base64');
+    const base64Image = fs.readFileSync(imagePath).toString('base64');
     const mimeType = getMimeType(imagePath);
+    const chave = process.env[fornecedor.env];
 
-    const response = await callGeminiVision(apiKey, base64Image, mimeType, prompt);
+    let response;
+    if (fornecedor.id === 'gemini') {
+      response = await callGeminiVision(chave, base64Image, mimeType, prompt);
+    } else if (fornecedor.id === 'anthropic') {
+      response = await callAnthropicVision(chave, base64Image, mimeType, prompt);
+    } else {
+      response = await callOpenAIVision(chave, base64Image, mimeType, prompt);
+    }
 
     return {
       success: true,
       analysis: response,
-      imagePath
+      imagePath,
+      fornecedor: fornecedor.nome
     };
   } catch (err) {
-    return { success: false, error: `Erro na análise: ${err.message}` };
+    return { success: false, error: `Erro na análise (${fornecedor.nome}): ${err.message}` };
   }
+}
+
+/**
+ * Claude vê imagens como blocos de conteúdo dentro da mensagem, não como um
+ * campo à parte — é a diferença principal em relação ao Gemini.
+ */
+async function callAnthropicVision(apiKey, base64Image, mimeType, prompt) {
+  const resposta = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5',
+      max_tokens: 1500,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64Image } },
+          { type: 'text', text: prompt }
+        ]
+      }]
+    })
+  });
+
+  if (!resposta.ok) {
+    throw new Error(`Anthropic ${resposta.status}: ${(await resposta.text()).slice(0, 200)}`);
+  }
+
+  const dados = await resposta.json();
+  const texto = (dados.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+  if (!texto) throw new Error('resposta vazia');
+  return texto;
+}
+
+/** O GPT recebe a imagem como uma data URL dentro do conteúdo. */
+async function callOpenAIVision(apiKey, base64Image, mimeType, prompt) {
+  const resposta = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: process.env.OPENAI_MODEL || 'gpt-4o',
+      max_tokens: 1500,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } }
+        ]
+      }]
+    })
+  });
+
+  if (!resposta.ok) {
+    throw new Error(`OpenAI ${resposta.status}: ${(await resposta.text()).slice(0, 200)}`);
+  }
+
+  const dados = await resposta.json();
+  const texto = dados.choices?.[0]?.message?.content;
+  if (!texto) throw new Error('resposta vazia');
+  return texto;
 }
 
 /**
@@ -343,7 +436,7 @@ function formatSize(bytes) {
 }
 
 function isAvailable() {
-  return !!process.env.GEMINI_API_KEY;
+  return !!fornecedorDeVisao();
 }
 
 function getStats() {
@@ -372,6 +465,8 @@ module.exports = {
   analyzeImage,
   captureAndAnalyze,
   analyzeUploadedImage,
+  fornecedorDeVisao,
+  FORNECEDORES_COM_VISAO,
   extractTextFromScreen,
   findScreenErrors,
   isAvailable,

@@ -958,8 +958,11 @@ class MyBotApp {
           this.removeTypingIndicator();
           this.addMessage('bot', msg);
           
-          // Agora enviar a mensagem de texto (que pode usar o contexto do ficheiro)
-          await this.sendTextMessage(text);
+          // O ficheiro vai JUNTO com a pergunta. Sem isto, o upload e a
+          // pergunta eram dois acontecimentos sem ligação: o modelo recebia
+          // "descreve esta imagem" sem imagem nenhuma, e respondia — com
+          // razão — que não conseguia ver imagens.
+          await this.sendTextMessage(text, uploadResult.file);
         } else {
           this.removeTypingIndicator();
           this.addMessage('bot', msg);
@@ -980,7 +983,7 @@ class MyBotApp {
   /**
    * Envia apenas mensagem de texto (sem ficheiro)
    */
-  async sendTextMessage(text) {
+  async sendTextMessage(text, ficheiro = null) {
     // Adicionar mensagem do utilizador (se ainda não foi adicionada)
     if (!this.pendingFile) {
       this.addMessage('user', text);
@@ -1005,7 +1008,8 @@ class MyBotApp {
             requestId,
             data: {
               message: text,
-              conversationId: this.currentConversationId
+              conversationId: this.currentConversationId,
+              ficheiro
             }
           }));
         } else {
@@ -1017,7 +1021,8 @@ class MyBotApp {
             requestId,
             data: {
               message: text,
-              conversationId: this.currentConversationId
+              conversationId: this.currentConversationId,
+              ficheiro
             }
           }));
         }
@@ -1028,7 +1033,8 @@ class MyBotApp {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             message: text,
-            conversationId: this.currentConversationId
+            conversationId: this.currentConversationId,
+            ficheiro
           })
         });
         

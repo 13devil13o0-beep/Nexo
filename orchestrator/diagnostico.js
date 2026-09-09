@@ -353,6 +353,17 @@ function diagnosticar(fontes = {}) {
     });
   }
 
+  // Ver imagens exige um motor com visão, e nem todos têm. Quem só tem Groq
+  // ou Cerebras pode anexar uma imagem e levar com um erro em vez de uma
+  // descrição — mais vale sabê-lo antes.
+  if (fontes.semVisao) {
+    avisos.push({
+      id: 'sem-visao',
+      humano: 'Nenhum dos teus motores de IA sabe ver imagens. Anexar uma foto vai dar erro.',
+      comoResolver: 'O Gemini é gratuito e tem visão: aistudio.google.com/apikey — depois corre npm run instalar'
+    });
+  }
+
   if (fornecedores.length === 1 && !ollama.presente) {
     avisos.push({
       id: 'um-so-fornecedor',
@@ -386,7 +397,12 @@ async function diagnosticarCompleto(fontes = {}) {
       && !atalho.existe();
   } catch (e) { /* sem estes modulos, o diagnostico continua a valer */ }
 
-  return diagnosticar({ ...fontes, ollama, atalhoEmFalta });
+  let semVisao = false;
+  try {
+    semVisao = !require('../agents/visionAgent').fornecedorDeVisao();
+  } catch (e) { /* sem o agente, não se afirma nada */ }
+
+  return diagnosticar({ ...fontes, ollama, atalhoEmFalta, semVisao });
 }
 
 function formatarDiagnostico(d) {

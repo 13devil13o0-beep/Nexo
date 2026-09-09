@@ -180,6 +180,35 @@ app.post('/api/dispositivo/modo', security.authMiddleware, (req, res) => {
   res.json({ ok: true, definicoes: definicoes.obter(), nota: 'Aplica-se ao próximo arranque.' });
 });
 
+/**
+ * Uma pergunta com imagem anexada pertence ao agente de visão, não ao chat.
+ *
+ * Antes isto não existia: o upload e a pergunta seguiam caminhos separados, o
+ * modelo de texto recebia "descreve esta imagem" sem imagem nenhuma, e
+ * respondia — com toda a razão — que não conseguia ver imagens. A capacidade
+ * estava no projecto e nunca era chamada.
+ *
+ * @returns {Promise<string|null>} a resposta, ou null quando não se aplica
+ */
+const EXTENSOES_DE_IMAGEM = /\.(png|jpe?g|gif|webp|bmp)$/i;
+
+async function responderSobreImagem(mensagem, ficheiro) {
+  if (!ficheiro || !ficheiro.path) return null;
+  if (!EXTENSOES_DE_IMAGEM.test(ficheiro.name || ficheiro.path)) return null;
+
+  const visionAgent = require('../agents/visionAgent');
+  const pergunta = (mensagem || '').trim();
+
+  console.log(`👁️ Imagem anexada — a analisar com visão: ${ficheiro.name || ficheiro.path}`);
+  const r = await visionAgent.analyzeUploadedImage(ficheiro.path, pergunta);
+
+  if (!r.success) return `❌ ${r.error}`;
+
+  return r.fornecedor ? `${r.analysis}
+
+_(visão por ${r.fornecedor})_` : r.analysis;
+}
+
 app.get('/api/status', (req, res) => {
   res.json({
     online: true,
@@ -202,10 +231,16 @@ app.get('/api/status', (req, res) => {
 // Chat principal
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, conversationId, context = {} } = req.body;
+    const { message, conversationId, context = {}, ficheiro } = req.body;
     
     if (!message) {
       return res.status(400).json({ error: 'Mensagem obrigatória' });
+    }
+
+    // Imagem anexada: vai para a visão, não para o chat de texto.
+    const daImagem = await responderSobreImagem(message, ficheiro);
+    if (daImagem) {
+      return res.json({ success: true, response: daImagem, conversationId });
     }
     
     // Enriquecer com contexto RAG (se houver documentos indexados)
@@ -728,6 +763,16 @@ async function handleWSMessage(clientId, message) {
     case 'chat':
       // Processar chat
       try {
+        const daImagem = await responderSobreImagem(data.message, data.ficheiro);
+        if (daImagem) {
+          client.ws.send(JSON.stringify({
+            type: 'chat_response',
+            requestId,
+            data: { response: daImagem, conversationId: data.conversationId }
+          }));
+          break;
+        }
+
         const context = {
           source: 'websocket',
           clientId,
@@ -775,6 +820,18 @@ async function handleWSMessage(clientId, message) {
       // Chat com streaming token-a-token via WebSocket
       // IMPORTANTE: Verificar intent primeiro antes de streamer
       try {
+        // A visão vem antes de tudo: uma imagem anexada não é conversa a
+        // transmitir token a token, é uma pergunta com uma resposta só.
+        const respostaVisao = await responderSobreImagem(data.message, data.ficheiro);
+        if (respostaVisao) {
+          client.ws.send(JSON.stringify({
+            type: 'chat_response',
+            requestId,
+            data: { response: respostaVisao, conversationId: data.conversationId }
+          }));
+          break;
+        }
+
         // Verificar intent via regex (instantâneo)
         const intentParser = require('./intentParser');
         const intentData = intentParser.parseIntent(data.message);
