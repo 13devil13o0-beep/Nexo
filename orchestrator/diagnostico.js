@@ -342,6 +342,17 @@ function diagnosticar(fontes = {}) {
     });
   }
 
+  // O ícone que o utilizador pediu e que desapareceu. É um aviso e não um
+  // problema — o NEXO funciona sem ele — mas fica dito, porque a alternativa
+  // era o utilizador procurar um ícone que ninguém lhe ia repor.
+  if (fontes.atalhoEmFalta) {
+    avisos.push({
+      id: 'atalho-em-falta',
+      humano: 'Pediste um ícone no ambiente de trabalho e ele não está lá.',
+      comoResolver: 'O "npm start" repõe-no sozinho. Para deixar de o querer: npm run atalho -- --remover'
+    });
+  }
+
   if (fornecedores.length === 1 && !ollama.presente) {
     avisos.push({
       id: 'um-so-fornecedor',
@@ -365,7 +376,17 @@ function diagnosticar(fontes = {}) {
 /** Versão com rede: acrescenta o que só se sabe perguntando. */
 async function diagnosticarCompleto(fontes = {}) {
   const ollama = await verificarOllama();
-  return diagnosticar({ ...fontes, ollama });
+
+  let atalhoEmFalta = false;
+  try {
+    const atalho = require('./atalho');
+    const definicoes = require('./definicoes');
+    atalhoEmFalta = definicoes.obter('quereAtalho') === true
+      && atalho.sistemaSuportado()
+      && !atalho.existe();
+  } catch (e) { /* sem estes modulos, o diagnostico continua a valer */ }
+
+  return diagnosticar({ ...fontes, ollama, atalhoEmFalta });
 }
 
 function formatarDiagnostico(d) {

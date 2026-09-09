@@ -455,7 +455,7 @@ async function principal() {
   // exactamente "node arranque.js" — a mesma porta de entrada do "npm start",
   // por isso respeita o perfil que acabaste de escolher, sem uma segunda
   // lógica de arranque a poder divergir da primeira.
-  if (atalho.sistemaSuportado() && decisao.sinais.graficos && !definicoes.obter('atalhoCriado')) {
+  if (atalho.sistemaSuportado() && decisao.sinais.graficos && !atalho.existe()) {
     console.log('');
     linha();
     console.log('  🖱️  ÍCONE NA ÁREA DE TRABALHO');
@@ -475,12 +475,15 @@ async function principal() {
         if (resultado.iconeIncluido === false) {
           console.log('      (por agora aparece com o ícone genérico do sistema)');
         }
-        definicoes.definir('atalhoCriado', true);
+        definicoes.definir('quereAtalho', true);
       } else {
         console.log(`   ❌ Não consegui criar o ícone: ${resultado.motivo || 'razão desconhecida'}`);
         console.log('      Podes tentar depois com: npm run atalho');
       }
     } else {
+      // Guardar a recusa: sem isto, quem diz que nao volta a ser perguntado
+      // em cada instalacao, o que e a definicao de chatice.
+      definicoes.definir('quereAtalho', false);
       console.log('');
       console.log('   Sem problema. Quando quiseres: npm run atalho');
       console.log('');

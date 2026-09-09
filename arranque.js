@@ -31,6 +31,7 @@ const { abrirBrowser } = require('./orchestrator/browser');
 const dispositivo = require('./orchestrator/dispositivo');
 const definicoes = require('./orchestrator/definicoes');
 const diagnostico = require('./orchestrator/diagnostico');
+const atalho = require('./orchestrator/atalho');
 
 const RAIZ = __dirname;
 const PORTA = process.env.PORT || 7777;
@@ -231,6 +232,30 @@ function lancarServico(decisao) {
  *
  * @returns {Promise<boolean>} continuar a arrancar?
  */
+/**
+ * Repõe o ícone quando ele devia estar lá e não está.
+ *
+ * Só age quando o utilizador JÁ disse que queria um (quereAtalho), e nunca
+ * pergunta nada — limita-se a repor o que foi pedido. Sem isto, quem apagasse
+ * o ícone sem querer ficava sem forma de o recuperar: o `npm start` nunca os
+ * cria, e o instalador tinha deixado de o oferecer.
+ *
+ * Para deixar de o querer: `npm run atalho -- --remover`.
+ */
+function reporAtalhoSeFaltar(decisao) {
+  if (!definicoes.obter('quereAtalho')) return;
+  if (!decisao.sinais.graficos) return;          // sem ambiente de trabalho, não há onde o pôr
+  if (!atalho.sistemaSuportado()) return;
+  if (atalho.existe()) return;
+
+  const r = atalho.criar();
+  if (r.ok) {
+    console.log('  🖱️  O ícone tinha desaparecido do ambiente de trabalho — reposto.');
+  } else {
+    console.warn(`  ⚠️  Não consegui repor o ícone: ${r.motivo}`);
+  }
+}
+
 async function garantirInstalacao(decisao) {
   const estado = diagnostico.diagnosticar({ perfil: decisao.perfil });
   if (estado.pronto) return true;
@@ -295,6 +320,8 @@ async function principal() {
     console.error('   A instalação não ficou completa. Corre "npm run instalar" quando puderes.');
     process.exit(1);
   }
+
+  reporAtalhoSeFaltar(decisao);
 
   switch (decisao.perfil) {
     case 'completo': return lancarCompleto(decisao);

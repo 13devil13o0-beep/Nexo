@@ -10,8 +10,13 @@
  *   modo               'auto' | 'completo' | 'leve' | 'consola' | 'servico'
  *   arrancarEscondido  no perfil completo, começa só na bandeja
  *   perfilPagina       'auto' | 'completo' | 'leve'  (peso da interface web)
- *   atalhoCriado       já existe ícone na área de trabalho — não voltar a
- *                      perguntar em cada "npm run instalar"
+ *   quereAtalho        o utilizador QUER um ícone na área de trabalho
+ *
+ * Nota sobre o quereAtalho: guarda uma vontade, não um facto. Chamava-se
+ * atalhoCriado e queria dizer "já criei", o que passou a ser mentira no
+ * momento em que alguém apagou o ícone — e o instalador, a confiar nisso,
+ * deixou de o oferecer a quem tinha ficado sem ele. Se o ficheiro existe ou
+ * não pergunta-se ao disco (orchestrator/atalho.js), nunca aqui.
  */
 
 const fs = require('fs');
@@ -24,7 +29,7 @@ const PADRAO = Object.freeze({
   modo: 'auto',
   arrancarEscondido: false,
   perfilPagina: 'auto',
-  atalhoCriado: false
+  quereAtalho: false
 });
 
 let cache = null;
@@ -34,7 +39,15 @@ function ler() {
   if (cache) return cache;
 
   try {
-    cache = { ...PADRAO, ...JSON.parse(fs.readFileSync(FICHEIRO, 'utf8')) };
+    const guardado = JSON.parse(fs.readFileSync(FICHEIRO, 'utf8'));
+
+    // Quem já tinha o nome antigo não perde a escolha que fez.
+    if (guardado.atalhoCriado !== undefined && guardado.quereAtalho === undefined) {
+      guardado.quereAtalho = guardado.atalhoCriado;
+    }
+    delete guardado.atalhoCriado;
+
+    cache = { ...PADRAO, ...guardado };
   } catch (e) {
     // Sem ficheiro, ficheiro corrompido ou sem permissões: os valores por
     // omissão servem, e o NEXO arranca à mesma.

@@ -48,6 +48,62 @@ function sistemaSuportado(plataforma = process.platform) {
   return ['win32', 'darwin', 'linux'].includes(plataforma);
 }
 
+/** Onde o atalho fica, em cada sistema. */
+function caminhoDoAtalho(plataforma = process.platform) {
+  if (plataforma === 'win32') return path.join(caminhoDesktop(), 'NEXO.lnk');
+  if (plataforma === 'darwin') return path.join(caminhoDesktop(), 'NEXO.app');
+  if (plataforma === 'linux') return path.join(caminhoDesktop(), 'nexo.desktop');
+  return null;
+}
+
+/**
+ * O atalho existe MESMO?
+ *
+ * Isto tem de ser perguntado ao disco, nunca às definições. Havia um campo
+ * `atalhoCriado` a dizer que sim enquanto o ficheiro já tinha sido apagado —
+ * e o instalador, a confiar nele, deixava de oferecer o ícone a quem tinha
+ * ficado sem ele. Um registo que diverge da realidade em silêncio é pior do
+ * que não ter registo nenhum.
+ */
+function existe(plataforma = process.platform) {
+  const caminho = caminhoDoAtalho(plataforma);
+  if (!caminho) return false;
+
+  try {
+    fs.statSync(caminho);
+    return true;
+  } catch (e) {
+    // No Linux o lançador pode existir só no menu de aplicações, sem estar na
+    // área de trabalho. Continua a contar como existente.
+    if (plataforma === 'linux') {
+      try {
+        fs.statSync(path.join(os.homedir(), '.local', 'share', 'applications', 'nexo.desktop'));
+        return true;
+      } catch (e2) { /* também não */ }
+    }
+    return false;
+  }
+}
+
+/** Remove o atalho. Devolve o que foi apagado. */
+function remover(plataforma = process.platform) {
+  const apagados = [];
+
+  const candidatos = [caminhoDoAtalho(plataforma)];
+  if (plataforma === 'linux') {
+    candidatos.push(path.join(os.homedir(), '.local', 'share', 'applications', 'nexo.desktop'));
+  }
+
+  for (const caminho of candidatos.filter(Boolean)) {
+    try {
+      fs.rmSync(caminho, { recursive: true, force: true });
+      if (!fs.existsSync(caminho)) apagados.push(caminho);
+    } catch (e) { /* já não estava lá */ }
+  }
+
+  return apagados;
+}
+
 // ═══════════════════════════════════════════════════════════
 // WINDOWS
 // ═══════════════════════════════════════════════════════════
@@ -223,6 +279,9 @@ module.exports = {
   caminhoDesktop,
   existeDesktop,
   sistemaSuportado,
+  caminhoDoAtalho,
+  existe,
+  remover,
   conteudoDesktopEntry,
   plistNexo,
   criar,

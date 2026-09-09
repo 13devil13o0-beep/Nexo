@@ -2447,6 +2447,111 @@ describe('📄 Referência "Como Abrir"', () => {
 
 
 // ═══════════════════════════════════════════════════════════
+// ATALHO — a vontade do utilizador contra o que está no disco
+// ═══════════════════════════════════════════════════════════
+
+describe('🖱️ O atalho: vontade vs realidade', () => {
+  const atalho = require('../orchestrator/atalho');
+  const definicoes = require('../orchestrator/definicoes');
+  const diagnostico = require('../orchestrator/diagnostico');
+  const fs = require('fs');
+  const path = require('path');
+  const os = require('os');
+
+  test('sabe onde o atalho fica em cada sistema', () => {
+    assertIncludes(atalho.caminhoDoAtalho('win32'), 'NEXO.lnk');
+    assertIncludes(atalho.caminhoDoAtalho('darwin'), 'NEXO.app');
+    assertIncludes(atalho.caminhoDoAtalho('linux'), 'nexo.desktop');
+    assertEqual(atalho.caminhoDoAtalho('freebsd'), null);
+  });
+
+  test('existe() pergunta ao disco, não às definições', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nexo-atalho-'));
+    fs.mkdirSync(path.join(tmp, 'Desktop'));
+    const original = os.homedir;
+    os.homedir = () => tmp;
+
+    try {
+      // Nada criado ainda: tem de dizer que não existe, independentemente
+      // do que qualquer definição diga.
+      assertEqual(atalho.existe('linux'), false, 'sem ficheiro, não existe');
+
+      atalho.criarAtalhoLinux();
+      assertEqual(atalho.existe('linux'), true, 'depois de criado, existe');
+    } finally {
+      os.homedir = original;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('no Linux, o lançador no menu chega mesmo sem pasta Desktop', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nexo-atalho-'));
+    const original = os.homedir;
+    os.homedir = () => tmp; // sem Desktop/
+
+    try {
+      atalho.criarAtalhoLinux();
+      assertEqual(atalho.existe('linux'), true, 'só no menu de aplicações já conta');
+    } finally {
+      os.homedir = original;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('remover() apaga e deixa de existir', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nexo-atalho-'));
+    fs.mkdirSync(path.join(tmp, 'Desktop'));
+    const original = os.homedir;
+    os.homedir = () => tmp;
+
+    try {
+      atalho.criarAtalhoLinux();
+      assertEqual(atalho.existe('linux'), true);
+
+      const apagados = atalho.remover('linux');
+      assert(apagados.length > 0, 'devia dizer o que apagou');
+      assertEqual(atalho.existe('linux'), false, 'depois de removido, não existe');
+    } finally {
+      os.homedir = original;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('a definição guarda uma vontade, não um facto', () => {
+    // O nome importa: "quereAtalho" nao pode ser lido como "ja criei".
+    assert('quereAtalho' in definicoes.PADRAO, 'a definição chama-se quereAtalho');
+    assert(!('atalhoCriado' in definicoes.PADRAO), 'o nome antigo saiu');
+  });
+
+  test('um ícone em falta é avisado, não escondido', () => {
+    const d = diagnostico.diagnosticar({
+      versaoNode: '20.0.0',
+      env: { GROQ_API_KEY: 'gsk_chavelongaboa123', CEREBRAS_API_KEY: 'csk-outralonga' },
+      raiz: 'C:/fake',
+      existe: () => true,
+      atalhoEmFalta: true
+    });
+
+    const aviso = d.avisos.find(a => a.id === 'atalho-em-falta');
+    assert(aviso, 'devia avisar que o ícone desapareceu');
+    assertIncludes(aviso.comoResolver, 'npm start');
+    assert(d.pronto, 'mas não impede o NEXO de funcionar');
+  });
+
+  test('sem ícone em falta, não há aviso nenhum', () => {
+    const d = diagnostico.diagnosticar({
+      versaoNode: '20.0.0',
+      env: { GROQ_API_KEY: 'gsk_chavelongaboa123', CEREBRAS_API_KEY: 'csk-outralonga' },
+      raiz: 'C:/fake',
+      existe: () => true,
+      atalhoEmFalta: false
+    });
+    assert(!d.avisos.some(a => a.id === 'atalho-em-falta'));
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
 // RESULTADO FINAL
 // ═══════════════════════════════════════════════════════════
 
