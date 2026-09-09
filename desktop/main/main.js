@@ -139,7 +139,17 @@ async function startCore() {
   // está sempre lá. Em desenvolvimento dá no mesmo — o binário é o do
   // node_modules e comporta-se como Node com esta variável ligada.
   coreProcess = spawn(process.execPath, [corePath], {
-    env: { ...process.env, NODE_ENV: 'production', ELECTRON_RUN_AS_NODE: '1' },
+    // NEXO_ABRIR_BROWSER=0 nao e detalhe: o motor abre o browser sozinho
+    // quando e o arranque do seu proprio processo — que e exactamente o caso
+    // aqui, porque o lancamos como processo separado. Sem esta linha, clicar
+    // no icone dava a janela do NEXO E um separador do browser, os dois com a
+    // mesma pagina.
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      ELECTRON_RUN_AS_NODE: '1',
+      NEXO_ABRIR_BROWSER: '0'
+    },
     detached: false,
     windowsHide: true
   });

@@ -11,6 +11,10 @@
  *   arrancarEscondido  no perfil completo, começa só na bandeja
  *   perfilPagina       'auto' | 'completo' | 'leve'  (peso da interface web)
  *   quereAtalho        o utilizador QUER um ícone na área de trabalho
+ *   interfacePreferida 'janela' | 'browser' — onde a interface aparece
+ *                      quando há ecrã. Não é o mesmo que `modo`: o modo diz
+ *                      o que a MÁQUINA aguenta, isto diz o que a PESSOA
+ *                      prefere. Nunca abrem os dois ao mesmo tempo.
  *
  * Nota sobre o quereAtalho: guarda uma vontade, não um facto. Chamava-se
  * atalhoCriado e queria dizer "já criei", o que passou a ser mentira no
@@ -29,7 +33,8 @@ const PADRAO = Object.freeze({
   modo: 'auto',
   arrancarEscondido: false,
   perfilPagina: 'auto',
-  quereAtalho: false
+  quereAtalho: false,
+  interfacePreferida: 'janela'
 });
 
 let cache = null;

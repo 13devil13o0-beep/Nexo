@@ -147,7 +147,14 @@ app.get('/api/dispositivo', (req, res) => {
 
 /** Guarda o modo de arranque escolhido pelo utilizador. */
 app.post('/api/dispositivo/modo', security.authMiddleware, (req, res) => {
-  const { modo, arrancarEscondido, perfilPagina } = req.body || {};
+  const { modo, arrancarEscondido, perfilPagina, interfacePreferida } = req.body || {};
+
+  if (interfacePreferida !== undefined) {
+    if (!['janela', 'browser'].includes(interfacePreferida)) {
+      return res.status(400).json({ error: 'Interface inválida', validos: ['janela', 'browser'] });
+    }
+    definicoes.definir('interfacePreferida', interfacePreferida);
+  }
 
   if (modo !== undefined) {
     if (modo !== 'auto' && !dispositivo.perfilValido(modo)) {

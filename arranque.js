@@ -106,6 +106,18 @@ function seguir(filho) {
  * para o modo leve, que faz a mesma coisa sem janela própria.
  */
 function lancarCompleto(decisao) {
+  // A pessoa pode preferir o browser mesmo tendo janela disponivel. Aqui
+  // isso decide-se ANTES de o Electron entrar em cena — nao adianta abrir a
+  // janela e so depois mandar o browser tambem, que era como se ficava com
+  // as duas ao mesmo tempo.
+  if (definicoes.obter('interfacePreferida') === 'browser') {
+    return lancarLeve({
+      ...decisao,
+      perfil: 'leve',
+      motivo: 'preferes a interface no browser (npm run atalho ou o botao na pagina troca)'
+    });
+  }
+
   let binarioElectron;
   try {
     binarioElectron = require('electron');
@@ -173,7 +185,8 @@ async function lancarConsola(decisao) {
   if (!jaDePe) {
     motor = spawn(process.execPath, [CAMINHO_MOTOR], {
       stdio: 'ignore',
-      env: { ...process.env, NEXO_MODO: 'servico' }
+      // Quem esta num terminal nao quer um browser a saltar-lhe a frente.
+      env: { ...process.env, NEXO_MODO: 'servico', NEXO_ABRIR_BROWSER: '0' }
     });
     motor.on('error', () => { /* sem motor, a REPL funciona à mesma: fala com o orchestrator directamente */ });
   }

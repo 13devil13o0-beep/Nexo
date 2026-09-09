@@ -161,6 +161,15 @@ class MyBotApp {
     // A ocultação vive no CSS (body.is-browser). O atributo hidden não chega,
     // porque .title-btn declara display:flex e ganha ao estilo do agente.
     document.body.classList.add(IS_ELECTRON ? 'is-electron' : 'is-browser');
+
+    // O botao de troca existe nas duas cascas, com o destino de cada uma.
+    const troca = this.elements.btnWebUI;
+    if (troca) {
+      troca.textContent = IS_ELECTRON ? '🌐 Usar no browser' : '🖥️ Usar em janela';
+      troca.title = IS_ELECTRON
+        ? 'Abrir no browser e passar a arrancar assim'
+        : 'Passar a arrancar na janela do NEXO (aplica-se ao próximo arranque)';
+    }
   }
 
   /**
@@ -466,12 +475,45 @@ class MyBotApp {
       this.abrirPagina('/dashboard');
     });
 
-    // Este é o caso oposto: "abrir no browser" só quer dizer alguma coisa a
-    // partir da janela nativa. Num browser já lá estamos.
-    this.elements.btnWebUI.addEventListener('click', () => {
-      if (IS_ELECTRON) this.openExternal(this.apiUrl);
-      else this.abrirPagina('/');
-    });
+    // Trocar entre a janela própria e o browser. Nunca os dois ao mesmo tempo.
+    this.elements.btnWebUI.addEventListener('click', () => this.trocarInterface());
+  }
+
+  /**
+   * Alterna entre a janela de secretária e o browser, e GUARDA a escolha.
+   *
+   * A escolha fica nas definições, por isso os arranques seguintes já abrem
+   * onde preferes — não é só para esta vez. É a diferença entre um atalho e
+   * uma preferência.
+   *
+   * Da janela para o browser a troca é imediata: abre-se o browser e esconde-se
+   * a janela para a bandeja. Ao contrário não dá para ser instantâneo — uma
+   * página não pode lançar uma aplicação de secretária — por isso aplica-se ao
+   * próximo arranque, e diz-se isso em vez de fingir que aconteceu.
+   */
+  async trocarInterface() {
+    const paraBrowser = IS_ELECTRON;
+    const preferida = paraBrowser ? 'browser' : 'janela';
+
+    try {
+      await fetch(`${this.apiUrl}/api/dispositivo/modo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interfacePreferida: preferida })
+      });
+    } catch (e) {
+      this.showToast('Não consegui guardar a preferência.', 'error');
+      return;
+    }
+
+    if (paraBrowser) {
+      this.openExternal(this.apiUrl);
+      // A janela some para a bandeja em vez de fechar: fechá-la levaria o
+      // motor com ela, e a página que acabámos de abrir ficava sem servidor.
+      setTimeout(() => window.electronAPI?.hideWindow(), 600);
+    } else {
+      this.showToast('✅ Da próxima vez o NEXO abre na janela própria.', 'success');
+    }
   }
 
   /**

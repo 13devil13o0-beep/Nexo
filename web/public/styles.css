@@ -1258,6 +1258,31 @@ body {
   }
 }
 
+/* Ecrã estreito E baixo — o telemóvel pequeno, onde não há altura a perder.
+   A duas colunas os seis cartões ocupam três filas, e a fila a mais é
+   exactamente o que fazia aparecer a barra de scroll. A três colunas voltam
+   às duas filas; a descrição de cada cartão sai, porque a esta largura já
+   quase não se lia e o título sozinho diz o que é. */
+@media (max-width: 600px) and (max-height: 720px) {
+  .welcome-capabilities {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+
+  .capability-card {
+    padding: 8px 4px;
+  }
+
+  .cap-desc {
+    display: none;
+  }
+
+  .cap-title {
+    font-size: 10px;
+    line-height: 1.2;
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════
    ADAPTAÇÃO À PLATAFORMA
 
@@ -1268,10 +1293,13 @@ body {
    ═══════════════════════════════════════════════════════════ */
 
 body.is-browser #btnMinimize,
-body.is-browser #btnHide,
-body.is-browser #btnWebUI {
+body.is-browser #btnHide {
   display: none !important;
 }
+
+/* O #btnWebUI ja NAO se esconde no browser: deixou de ser "abrir no browser"
+   e passou a ser o interruptor entre as duas cascas, que tem de existir dos
+   dois lados para se poder voltar atras. */
 
 /* ═══════════════════════════════════════════════════════════
    PERFIL LEVE

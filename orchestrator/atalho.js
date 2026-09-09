@@ -111,16 +111,56 @@ function remover(plataforma = process.platform) {
 /** PowerShell exige aspas simples duplicadas para escapar uma aspa simples. */
 const aspasPs = (s) => String(s).replace(/'/g, "''");
 
+/**
+ * Lancador sem janela de consola.
+ *
+ * Um atalho que aponta directamente para o node.exe abre sempre uma consola
+ * preta ao lado da janela do NEXO — o utilizador ve duas coisas quando pediu
+ * uma. O wscript corre o mesmo comando com a janela escondida.
+ *
+ * A saida vai para logs/arranque.log em vez de se perder: uma consola
+ * escondida que engula os erros seria pior do que a consola a mais. Se o NEXO
+ * nao abrir, a razao fica escrita nesse ficheiro.
+ */
+function escreverLancadorOculto() {
+  const vbs = path.join(RAIZ, 'nexo-oculto.vbs');
+  const registo = path.join(RAIZ, 'logs', 'arranque.log');
+
+  try { fs.mkdirSync(path.join(RAIZ, 'logs'), { recursive: true }); } catch (e) { /* segue */ }
+
+  // Em VBScript as aspas escapam-se duplicando-as. O comando final e:
+  //   cmd /c ""<node>" "<arranque.js>" > "<log>" 2>&1"
+  const comando =
+    'cmd /c ""' + NODE + '" "' + CAMINHO_ARRANQUE + '" > "' + registo + '" 2>&1"';
+
+  const conteudo = [
+    "' Lancador do NEXO sem janela de consola. Gerado por orchestrator/atalho.js.",
+    "' Nao editar a mao: e reescrito sempre que se corre 'npm run atalho'.",
+    'Set sh = CreateObject("WScript.Shell")',
+    'sh.CurrentDirectory = "' + RAIZ + '"',
+    'sh.Run "' + comando.replace(/"/g, '""') + '", 0, False'
+  ].join(String.fromCharCode(13, 10));
+
+  fs.writeFileSync(vbs, conteudo, 'utf8');
+  return vbs;
+}
+
 function criarAtalhoWindows() {
   const alvo = path.join(caminhoDesktop(), 'NEXO.lnk');
   const icone = path.join(RAIZ, 'assets', 'icon.ico');
+
+  // O atalho aponta para o wscript, nao para o node: assim nao aparece a
+  // consola preta ao lado da janela do NEXO. O icone continua a ser o nosso,
+  // porque um atalho pode declarar o icone que quiser.
+  const lancador = escreverLancadorOculto();
+  const wscript = path.join(process.env.SystemRoot || 'C:\Windows', 'System32', 'wscript.exe');
 
   const script = [
     "$ErrorActionPreference = 'Stop'",
     '$WshShell = New-Object -ComObject WScript.Shell',
     `$Shortcut = $WshShell.CreateShortcut('${aspasPs(alvo)}')`,
-    `$Shortcut.TargetPath = '${aspasPs(NODE)}'`,
-    `$Shortcut.Arguments = '"${aspasPs(CAMINHO_ARRANQUE)}"'`,
+    `$Shortcut.TargetPath = '${aspasPs(wscript)}'`,
+    `$Shortcut.Arguments = '"${aspasPs(lancador)}"'`,
     `$Shortcut.WorkingDirectory = '${aspasPs(RAIZ)}'`,
     `$Shortcut.IconLocation = '${aspasPs(icone)},0'`,
     "$Shortcut.Description = 'NEXO - Assistente IA pessoal'",
