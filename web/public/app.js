@@ -99,6 +99,7 @@ class MyBotApp {
       btnUpload: document.getElementById('btnUpload'),
       fileInput: document.getElementById('fileInput'),
       btnMinimize: document.getElementById('btnMinimize'),
+      btnMaximize: document.getElementById('btnMaximize'),
       btnHide: document.getElementById('btnHide'),
       btnNewChat: document.getElementById('btnNewChat'),
       btnNewChatSidebar: document.getElementById('btnNewChatSidebar'),
@@ -449,6 +450,10 @@ class MyBotApp {
       if (window.electronAPI) window.electronAPI.minimizeWindow();
     });
     
+    this.elements.btnMaximize?.addEventListener('click', () => {
+      window.electronAPI?.maximizeWindow();
+    });
+
     this.elements.btnHide.addEventListener('click', () => {
       if (window.electronAPI) window.electronAPI.hideWindow();
     });

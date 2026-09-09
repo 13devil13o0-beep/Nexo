@@ -112,33 +112,45 @@ function remover(plataforma = process.platform) {
 const aspasPs = (s) => String(s).replace(/'/g, "''");
 
 /**
- * Lancador sem janela de consola.
+ * Lançador sem janela de consola.
  *
  * Um atalho que aponta directamente para o node.exe abre sempre uma consola
- * preta ao lado da janela do NEXO — o utilizador ve duas coisas quando pediu
- * uma. O wscript corre o mesmo comando com a janela escondida.
+ * preta ao lado da janela do NEXO — duas coisas quando se pediu uma. O
+ * wscript corre o mesmo comando com a janela escondida.
  *
- * A saida vai para logs/arranque.log em vez de se perder: uma consola
- * escondida que engula os erros seria pior do que a consola a mais. Se o NEXO
- * nao abrir, a razao fica escrita nesse ficheiro.
+ * ─────────────────────────────────────────────────────────────
+ * PORQUE NÃO HÁ AQUI UM REDIRECCIONAMENTO
+ * ─────────────────────────────────────────────────────────────
+ * A primeira versão disto fazia:
+ *
+ *     cmd /c "node arranque.js > logs\arranque.log 2>&1"
+ *
+ * e parecia boa ideia: consola escondida, mas erros guardados. Só que o
+ * redireccionamento do cmd ABRE O FICHEIRO EM EXCLUSIVO. Com o NEXO já
+ * aberto, o primeiro processo ainda o segurava, o segundo arranque falhava
+ * logo aí — antes sequer de chegar ao Node — e clicar no ícone não fazia
+ * rigorosamente nada.
+ *
+ * Quem escreve o registo agora é o próprio arranque.js, em modo append, que
+ * o Node partilha entre processos. Aqui fica só o essencial: correr o Node
+ * sem janela.
  */
 function escreverLancadorOculto() {
   const vbs = path.join(RAIZ, 'nexo-oculto.vbs');
-  const registo = path.join(RAIZ, 'logs', 'arranque.log');
 
-  try { fs.mkdirSync(path.join(RAIZ, 'logs'), { recursive: true }); } catch (e) { /* segue */ }
-
-  // Em VBScript as aspas escapam-se duplicando-as. O comando final e:
-  //   cmd /c ""<node>" "<arranque.js>" > "<log>" 2>&1"
-  const comando =
-    'cmd /c ""' + NODE + '" "' + CAMINHO_ARRANQUE + '" > "' + registo + '" 2>&1"';
+  // Em VBScript, uma aspa dentro de um texto escreve-se duplicada. O comando
+  // que sai daqui é:   "<node>" "<arranque.js>"
+  // O --sem-consola diz ao arranque.js para guardar a saida em ficheiro. Tem
+  // de vir daqui: o processo nao consegue descobrir sozinho que a consola
+  // esta escondida, porque o Windows da-lhe uma a mesma.
+  const comando = '""' + NODE + '"" ""' + CAMINHO_ARRANQUE + '"" --sem-consola';
 
   const conteudo = [
-    "' Lancador do NEXO sem janela de consola. Gerado por orchestrator/atalho.js.",
-    "' Nao editar a mao: e reescrito sempre que se corre 'npm run atalho'.",
+    "' Lancador do NEXO sem janela de consola.",
+    "' Gerado por orchestrator/atalho.js — nao editar a mao.",
     'Set sh = CreateObject("WScript.Shell")',
     'sh.CurrentDirectory = "' + RAIZ + '"',
-    'sh.Run "' + comando.replace(/"/g, '""') + '", 0, False'
+    'sh.Run "' + comando + '", 0, False'
   ].join(String.fromCharCode(13, 10));
 
   fs.writeFileSync(vbs, conteudo, 'utf8');
@@ -153,7 +165,7 @@ function criarAtalhoWindows() {
   // consola preta ao lado da janela do NEXO. O icone continua a ser o nosso,
   // porque um atalho pode declarar o icone que quiser.
   const lancador = escreverLancadorOculto();
-  const wscript = path.join(process.env.SystemRoot || 'C:\Windows', 'System32', 'wscript.exe');
+  const wscript = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wscript.exe');
 
   const script = [
     "$ErrorActionPreference = 'Stop'",

@@ -11,6 +11,8 @@
  *   arrancarEscondido  no perfil completo, começa só na bandeja
  *   perfilPagina       'auto' | 'completo' | 'leve'  (peso da interface web)
  *   quereAtalho        o utilizador QUER um ícone na área de trabalho
+ *   janela             tamanho e posição da última vez, para não abrir sempre
+ *                      ao centro no mesmo tamanho
  *   interfacePreferida 'janela' | 'browser' — onde a interface aparece
  *                      quando há ecrã. Não é o mesmo que `modo`: o modo diz
  *                      o que a MÁQUINA aguenta, isto diz o que a PESSOA
@@ -34,7 +36,8 @@ const PADRAO = Object.freeze({
   arrancarEscondido: false,
   perfilPagina: 'auto',
   quereAtalho: false,
-  interfacePreferida: 'janela'
+  interfacePreferida: 'janela',
+  janela: null
 });
 
 let cache = null;

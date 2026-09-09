@@ -1293,6 +1293,7 @@ body {
    ═══════════════════════════════════════════════════════════ */
 
 body.is-browser #btnMinimize,
+body.is-browser #btnMaximize,
 body.is-browser #btnHide {
   display: none !important;
 }

@@ -21,6 +21,33 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const definicoes = require('../../orchestrator/definicoes');
 
+/**
+ * Uma so instancia. Isto tem de ser a PRIMEIRA coisa que acontece.
+ *
+ * Estava no fim do ficheiro, e por isso o segundo processo chegava a passar
+ * pelo app.whenReady() — criava janela, tentava subir o motor, e so depois
+ * desistia. O app.quit() nao e imediato, e nesse intervalo fazia-se trabalho
+ * inteiro para nada. Com a verificacao aqui em cima, o segundo processo sai
+ * antes de comecar.
+ *
+ * O `return` no topo de um modulo CommonJS e legitimo: o Node embrulha cada
+ * ficheiro numa funcao.
+ */
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  return;
+}
+
+// Ja ha um NEXO aberto e alguem clicou no icone outra vez: trazer a janela
+// para a frente em vez de nao fazer nada.
+app.on('second-instance', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
+});
+
 // Fix Chromium GPU cache errors on Windows (permission denied)
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 app.commandLine.appendSwitch('disable-gpu-cache');
@@ -239,9 +266,17 @@ function mostrarInterface(coreSubiu) {
 }
 
 function createWindow() {
+  // Tamanho e posição da última vez. Sem isto, a janela abre sempre a 900x700
+  // ao centro e quem a quer maior tem de a arrastar pelas margens a cada
+  // arranque — que é exactamente o que não se quer de uma aplicação que se
+  // usa todos os dias.
+  const guardada = definicoes.obter('janela') || {};
+
   mainWindow = new BrowserWindow({
-    width: 900,
-    height: 700,
+    width: guardada.largura || 900,
+    height: guardada.altura || 700,
+    x: guardada.x,
+    y: guardada.y,
     minWidth: 600,
     minHeight: 500,
     frame: false,
@@ -258,7 +293,45 @@ function createWindow() {
     },
     icon: path.join(__dirname, '../../assets/icon.png')
   });
-  
+
+  if (guardada.maximizada) mainWindow.maximize();
+
+  /**
+   * F12 e Ctrl+Shift+I abrem as ferramentas de programador.
+   *
+   * Por before-input-event e não por globalShortcut: um atalho global roubava
+   * o F12 a todas as outras aplicações do sistema. Assim só funciona quando a
+   * janela do NEXO está à frente, como em qualquer browser.
+   */
+  mainWindow.webContents.on('before-input-event', (evento, entrada) => {
+    const f12 = entrada.key === 'F12';
+    const ctrlShiftI = entrada.control && entrada.shift && entrada.key.toLowerCase() === 'i';
+
+    if (entrada.type === 'keyDown' && (f12 || ctrlShiftI)) {
+      mainWindow.webContents.toggleDevTools();
+      evento.preventDefault();
+    }
+  });
+
+  // Guardar o tamanho sempre que muda. O 'resized'/'moved' só dispara no fim
+  // do arrasto, por isso não há escrita nenhuma durante o movimento.
+  const guardarJanela = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const maximizada = mainWindow.isMaximized();
+    // Quando está maximizada, getBounds devolve o ecrã inteiro. Guarda-se o
+    // tamanho normal, para o "restaurar" ter para onde voltar.
+    const b = maximizada ? mainWindow.getNormalBounds() : mainWindow.getBounds();
+    definicoes.definir('janela', {
+      largura: b.width, altura: b.height, x: b.x, y: b.y, maximizada
+    });
+  };
+
+  mainWindow.on('resized', guardarJanela);
+  mainWindow.on('moved', guardarJanela);
+  mainWindow.on('maximize', guardarJanela);
+  mainWindow.on('unmaximize', guardarJanela);
+
+
   // Ecrã de arranque enquanto o Core sobe.
   //
   // Antes carregava-se logo o CORE_URL, com o servidor ainda por levantar: a
@@ -466,6 +539,14 @@ function registerShortcuts() {
 ipcMain.handle('get-core-status', () => ({ online: coreOnline }));
 ipcMain.handle('get-app-version', () => app.getVersion());
 ipcMain.handle('minimize-window', () => mainWindow?.minimize());
+
+/** Alterna entre maximizado e o tamanho anterior. */
+ipcMain.handle('maximize-window', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+  return mainWindow.isMaximized();
+});
 ipcMain.handle('hide-window', () => mainWindow?.hide());
 ipcMain.handle('show-window', () => mainWindow?.show());
 ipcMain.handle('quit-app', () => { isQuitting = true; app.quit(); });
@@ -574,16 +655,4 @@ app.on('before-quit', () => {
 });
 
 // Prevenir múltiplas instâncias
-const gotTheLock = app.requestSingleInstanceLock();
 
-if (!gotTheLock) {
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    }
-  });
-}

@@ -24,6 +24,7 @@
 
 require('dotenv').config();
 
+const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { abrirBrowser } = require('./orchestrator/browser');
@@ -44,6 +45,59 @@ const CAMINHO_CONSOLA = path.join(RAIZ, 'cli', 'cli.js');
 // ═══════════════════════════════════════════════════════════
 // UTILITÁRIOS
 // ═══════════════════════════════════════════════════════════
+
+/**
+ * Guarda a saída num ficheiro quando não há terminal para a mostrar.
+ *
+ * Quem arranca pelo ícone não tem consola nenhuma — de propósito, para não
+ * aparecer uma janela preta ao lado do NEXO. Mas uma saída que desaparece
+ * torna qualquer falha de arranque invisível, por isso fica escrita.
+ *
+ * Escrito por Node e em modo append, NÃO por um redireccionamento do cmd. A
+ * primeira versão deste lançador fazia `> logs/arranque.log` e isso trancava
+ * o ficheiro: com o NEXO já aberto, o segundo arranque falhava a abrir o log,
+ * morria antes de chegar ao Node, e clicar no ícone não fazia nada. O Node
+ * partilha o ficheiro; o cmd não.
+ */
+function espelharSaidaParaFicheiro(argv = process.argv) {
+  // Quem decide é o lançador, com --sem-consola. Nao se adivinha por isTTY:
+  // o wscript esconde a janela mas o Windows da na mesma uma consola ao
+  // processo, e o Node reporta isTTY=true. A deteccao automatica dizia
+  // sempre "ha terminal", e o registo nunca era escrito — que foi exactamente
+  // o que aconteceu na primeira versao disto.
+  if (!argv.includes('--sem-consola')) return null;
+
+  try {
+    fs.mkdirSync(path.join(RAIZ, 'logs'), { recursive: true });
+
+    const caminho = path.join(RAIZ, 'logs', 'arranque.log');
+
+    // Um registo que cresce para sempre acaba por ser um problema em vez de
+    // uma ajuda. Acima de 1 MB recomeca — o que interessa e o arranque de
+    // agora, nao o de ha tres meses.
+    try {
+      if (fs.statSync(caminho).size > 1024 * 1024) fs.unlinkSync(caminho);
+    } catch (e) { /* ainda nao existe */ }
+
+    const ficheiro = fs.createWriteStream(caminho, { flags: 'a' });
+
+    ficheiro.write(`
+=== ${new Date().toISOString()} ===
+`);
+
+    for (const canal of [process.stdout, process.stderr]) {
+      const original = canal.write.bind(canal);
+      canal.write = (pedaco, ...resto) => {
+        try { ficheiro.write(pedaco); } catch (e) { /* o registo nunca trava o arranque */ }
+        return original(pedaco, ...resto);
+      };
+    }
+
+    return ficheiro;
+  } catch (e) {
+    return null;   // sem log é pena, mas não é motivo para não arrancar
+  }
+}
 
 /**
  * Já há um motor a responder nesta porta?
@@ -144,7 +198,19 @@ function lancarCompleto(decisao) {
   const ambiente = { ...process.env };
   delete ambiente.ELECTRON_RUN_AS_NODE;
 
-  seguir(spawn(binarioElectron, argumentos, { stdio: 'inherit', env: ambiente }));
+  // 'pipe' e nao 'inherit': com inherit o Electron escreve directamente no
+  // descritor do sistema e passa ao lado do espelho para ficheiro, que e
+  // exactamente o que se quer ver quando o arranque corre mal e nao ha
+  // consola nenhuma.
+  const janela = spawn(binarioElectron, argumentos, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: ambiente
+  });
+
+  janela.stdout.on('data', d => process.stdout.write(d));
+  janela.stderr.on('data', d => process.stderr.write(d));
+
+  seguir(janela);
 }
 
 /**
@@ -314,6 +380,8 @@ async function garantirInstalacao(decisao) {
 // ═══════════════════════════════════════════════════════════
 
 async function principal() {
+  espelharSaidaParaFicheiro();
+
   const argv = process.argv.slice(2);
 
   const decisao = dispositivo.resolver({
