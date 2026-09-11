@@ -135,7 +135,8 @@ class MyBotApp {
     this.setupTTSToggle();
     this.setupElectronEvents();
     this.setupKeyboardShortcuts();
-    
+    this.setupSelecaoDeMensagens();
+
     // Conectar ao Core
     await this.connectToCore();
     
@@ -224,6 +225,7 @@ class MyBotApp {
           <strong>💡 Dicas Rápidas:</strong><br>
           • <strong>Ctrl+Space</strong> — Abrir/focar janela<br>
           • <strong>Ctrl+M</strong> — Ativar voz<br>
+          • <strong>Ctrl+A</strong> na conversa — marcar tudo, <strong>Ctrl+C</strong> copia<br>
           • <strong>Esc</strong> — Minimizar para tray<br>
           • Diz <code style="background:#0d1117;padding:2px 6px;border-radius:4px">/help</code> para ver comandos
         </div>
@@ -383,6 +385,7 @@ class MyBotApp {
               pre.appendChild(btn);
             });
           }
+          this._streamingDiv._textoOriginal = this._streamingText;
           this.speak(this._streamingText);
         }
         this._streamingDiv = null;
@@ -609,6 +612,135 @@ class MyBotApp {
     });
   }
   
+  // ═══════════════════════════════════════════════════════════
+  // MARCAR E COPIAR MENSAGENS
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * Copiar a conversa aos bocados não serve para nada: quem quer levar
+   * contexto de uma conversa para dentro de outra mensagem precisa de marcar
+   * várias de uma vez. O Ctrl+A dentro da conversa marca as mensagens (não a
+   * aplicação inteira) e o Ctrl+C entrega texto limpo, já com quem falou.
+   */
+  setupSelecaoDeMensagens() {
+    document.addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'a') return;
+      // Dentro da caixa de escrita o Ctrl+A é o de sempre: marca o que lá está.
+      if (this.estaAEscrever(e.target)) return;
+      const container = this.elements.messagesContainer;
+      if (!container || !container.querySelector('.message')) return;
+      e.preventDefault();
+      this.marcarTodasAsMensagens();
+    });
+
+    document.addEventListener('copy', (e) => {
+      if (this.estaAEscrever(e.target)) return;
+      const blocos = this.selecaoDeMensagens();
+      if (!blocos) return; // marcação fora da conversa: copiar como o browser faz
+
+      const texto = blocos.length === 1
+        ? blocos[0].texto
+        : blocos.map(b => `${b.quem}: ${b.texto}`).join('\n\n');
+
+      e.clipboardData.setData('text/plain', texto);
+      e.preventDefault();
+
+      if (blocos.length > 1) {
+        this.showToast(`📋 ${blocos.length} mensagens copiadas`, 'success');
+      }
+    });
+  }
+
+  /** O cursor está numa caixa de texto? Então os atalhos são os do costume. */
+  estaAEscrever(alvo) {
+    const el = (alvo instanceof Element) ? alvo : document.activeElement;
+    if (!el) return false;
+    return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+  }
+
+  marcarTodasAsMensagens() {
+    const container = this.elements.messagesContainer;
+    const range = document.createRange();
+    range.selectNodeContents(container);
+    const selecao = window.getSelection();
+    selecao.removeAllRanges();
+    selecao.addRange(range);
+  }
+
+  /**
+   * O que está marcado, mensagem a mensagem.
+   * Devolve null quando a marcação não toca em nenhuma mensagem, para o
+   * copiar normal do sistema continuar a funcionar no resto da interface.
+   */
+  selecaoDeMensagens() {
+    const selecao = window.getSelection();
+    const container = this.elements.messagesContainer;
+    if (!selecao || !container || selecao.rangeCount === 0 || selecao.isCollapsed) return null;
+
+    const marcado = selecao.getRangeAt(0);
+    const blocos = [];
+
+    for (const msg of container.querySelectorAll('.message')) {
+      if (msg.classList.contains('typing')) continue;
+      if (!selecao.containsNode(msg, true)) continue;
+
+      const conteudo = msg.querySelector('.message-content');
+      if (!conteudo) continue;
+
+      const parte = document.createRange();
+      parte.selectNodeContents(conteudo);
+
+      // Mensagem marcada de ponta a ponta? Vale o texto tal como chegou, com o
+      // markdown intacto — é esse que serve para colar como contexto.
+      const inteira =
+        marcado.compareBoundaryPoints(Range.START_TO_START, parte) <= 0 &&
+        marcado.compareBoundaryPoints(Range.END_TO_END, parte) >= 0;
+
+      let texto;
+      if (inteira && typeof msg._textoOriginal === 'string') {
+        texto = msg._textoOriginal;
+      } else {
+        // Marcada só em parte: aperta-se aos limites do que o utilizador pegou.
+        if (conteudo.contains(marcado.startContainer) &&
+            marcado.compareBoundaryPoints(Range.START_TO_START, parte) > 0) {
+          parte.setStart(marcado.startContainer, marcado.startOffset);
+        }
+        if (conteudo.contains(marcado.endContainer) &&
+            marcado.compareBoundaryPoints(Range.END_TO_END, parte) < 0) {
+          parte.setEnd(marcado.endContainer, marcado.endOffset);
+        }
+        texto = this.textoVisivel(parte);
+      }
+
+      texto = (texto || '').trim();
+      if (!texto) continue;
+
+      blocos.push({
+        quem: msg.querySelector('.message-sender')?.textContent.trim() || '',
+        texto
+      });
+    }
+
+    return blocos.length ? blocos : null;
+  }
+
+  /**
+   * Texto de um pedaço de mensagem como ele se lê no ecrã: parágrafos e blocos
+   * de código separados por linhas, sem os botões que lá estão por cima.
+   */
+  textoVisivel(range) {
+    const caixa = document.createElement('div');
+    caixa.appendChild(range.cloneContents());
+    caixa.querySelectorAll('button, .code-copy-btn, .streaming-cursor').forEach(x => x.remove());
+    // Fora de vista mas desenhado: o innerText só respeita parágrafos e
+    // quebras de linha quando o navegador chega a calcular o desenho.
+    caixa.style.cssText = 'position:absolute;left:-9999px;top:0;width:600px;';
+    document.body.appendChild(caixa);
+    const texto = caixa.innerText;
+    caixa.remove();
+    return texto;
+  }
+
   setupElectronEvents() {
     if (!window.electronAPI) return;
     
@@ -1088,6 +1220,10 @@ class MyBotApp {
       </div>
     `;
     
+    // O texto tal como chegou, antes de virar HTML: é este que se copia quando
+    // a mensagem é marcada por inteiro, para o markdown não se perder pelo meio.
+    messageDiv._textoOriginal = typeof content === 'string' ? content : String(content ?? '');
+
     // Copy button
     messageDiv.querySelector('.copy-btn').addEventListener('click', () => {
       this.copyToClipboard(content);

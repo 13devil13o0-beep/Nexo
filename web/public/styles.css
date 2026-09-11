@@ -690,6 +690,40 @@ body {
   color: var(--accent);
 }
 
+/* ═══ Marcar e copiar conversa ═══
+   O body tem user-select: none para a janela sem moldura se deixar arrastar
+   por onde se lhe pegue. Só que isso também apagava a seleção de texto das
+   mensagens: não havia maneira de marcar várias para copiar de uma vez.
+   A seleção volta aqui, mas só onde há texto para ler. */
+.messages-area,
+.message-content,
+.message-sender,
+.message-time,
+#messageInput {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.message-content {
+  cursor: text;
+}
+
+/* O que não é texto da conversa fica de fora: os ícones e os botões não
+   fazem falta nenhuma no que vai parar à área de transferência. */
+.message-avatar,
+.message-actions,
+.msg-action-btn,
+.code-copy-btn,
+.streaming-cursor {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.messages-area ::selection {
+  background: rgba(0, 217, 255, 0.32);
+  color: var(--text-primary);
+}
+
 /* Code blocks */
 .message-content pre {
   background: #0d1117;
