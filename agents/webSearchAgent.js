@@ -7,6 +7,7 @@
  */
 
 require('dotenv').config();
+const prazo = require('../orchestrator/prazo');
 
 const SERPER_API_KEY = process.env.SERPER_API_KEY;
 const USER_AGENT = 'NEXO/2.0 (Personal Assistant)';
@@ -86,15 +87,27 @@ async function searchDuckDuckGo(query) {
     const encoded = encodeURIComponent(query);
     const url = `https://api.duckduckgo.com/?q=${encoded}&format=json&no_html=1&skip_disambig=1`;
     
-    const response = await fetch(url, {
-      headers: { 'User-Agent': USER_AGENT }
-    });
-    
-    if (!response.ok) {
-      throw new Error(`DDG Error: ${response.status}`);
+    // Uma pesquisa sem prazo foi o que deixou o NEXO mudo: o pedido ficou
+    // pendurado, o WebSocket nunca respondeu e no ecrã ficou um cursor a
+    // piscar sem fim. Ou a pesquisa é rápida, ou não serve para responder.
+    const cronometro = prazo.relogio(prazo.PRAZO_PESQUISA_MS, 'O DuckDuckGo');
+    let data;
+    try {
+      const response = await fetch(url, {
+        headers: { 'User-Agent': USER_AGENT },
+        signal: cronometro.signal
+      });
+
+      if (!response.ok) {
+        throw new Error(`DDG Error: ${response.status}`);
+      }
+
+      data = await response.json();
+    } catch (err) {
+      throw prazo.traduzirErro(err, cronometro, 'O DuckDuckGo');
+    } finally {
+      cronometro.parar();
     }
-    
-    const data = await response.json();
     
     const results = {
       source: 'DuckDuckGo',
@@ -158,26 +171,35 @@ async function searchSerper(query, options = {}) {
     const type = options.type || 'search'; // search, news, images
     const num = options.count || 5;
     
-    const response = await fetch('https://google.serper.dev/' + type, {
-      method: 'POST',
-      headers: {
-        'X-API-KEY': SERPER_API_KEY,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        q: query,
-        num: num,
-        gl: 'pt',  // Portugal
-        hl: 'pt'   // Português
-      })
-    });
-    
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Serper Error: ${response.status} - ${error}`);
+    const cronometro = prazo.relogio(prazo.PRAZO_PESQUISA_MS, 'O Serper');
+    let data;
+    try {
+      const response = await fetch('https://google.serper.dev/' + type, {
+        method: 'POST',
+        headers: {
+          'X-API-KEY': SERPER_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          q: query,
+          num: num,
+          gl: 'pt',  // Portugal
+          hl: 'pt'   // Português
+        }),
+        signal: cronometro.signal
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Serper Error: ${response.status} - ${error}`);
+      }
+
+      data = await response.json();
+    } catch (err) {
+      throw prazo.traduzirErro(err, cronometro, 'O Serper');
+    } finally {
+      cronometro.parar();
     }
-    
-    const data = await response.json();
     
     const results = {
       source: 'Google (via Serper)',
@@ -243,11 +265,36 @@ async function searchSerper(query, options = {}) {
  * @param {string} query - Termo de pesquisa
  * @param {Object} options - Opções
  */
+/**
+ * Um motor de pesquisa recebe termos, não um desabafo.
+ *
+ * O que chegava aqui era a mensagem inteira do utilizador, porque o parser de
+ * intenções manda o prompt todo quando não consegue extrair os termos. Um
+ * parágrafo de duzentas palavras dentro de um endereço faz o motor engasgar-se
+ * ou devolver nada. Corta-se pela primeira frase e com um tecto.
+ */
+const MAX_TERMOS = 200;
+
+function limparConsulta(query) {
+  const texto = String(query || '').replace(/\s+/g, ' ').trim();
+  if (texto.length <= MAX_TERMOS) return texto;
+
+  const primeiraFrase = texto.split(/[.!?;]/)[0].trim();
+  if (primeiraFrase.length >= 10 && primeiraFrase.length <= MAX_TERMOS) return primeiraFrase;
+
+  return texto.slice(0, MAX_TERMOS).trim();
+}
+
 async function search(query, options = {}) {
+  query = limparConsulta(query);
+  if (!query) {
+    return { source: 'nenhum', query: '', results: [], error: 'Sem termos para pesquisar' };
+  }
+
   const queryType = classifyQuery(query);
-  
+
   console.log(`🔍 Pesquisa: "${query}" [Tipo: ${queryType}]`);
-  
+
   // Forçar motor específico se pedido
   if (options.forceEngine === 'serper') {
     return searchSerper(query, options);
@@ -417,6 +464,7 @@ module.exports = {
   formatResults,
   searchAndFormat,
   classifyQuery,
+  limparConsulta,
   extractSearchQuery,
   isAvailable,
   hasSerper,

@@ -22,6 +22,7 @@ const util = require('util');
 const execPromise = util.promisify(exec);
 const fs = require('fs');
 const path = require('path');
+const powershell = require('./powershell');
 
 // ═══════════════════════════════════════════════════════════
 // CONFIGURAÇÃO
@@ -644,24 +645,25 @@ async function takeScreenshot(options = {}) {
     const filename = options.filename || `screenshot_${Date.now()}.png`;
     const filepath = path.join(screenshotDir, filename);
     
-    // Usar PowerShell para capturar
-    const psScript = `
-      Add-Type -AssemblyName System.Windows.Forms
-      Add-Type -AssemblyName System.Drawing
-      
-      $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-      $bitmap = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
-      $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-      $graphics.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
-      
-      $bitmap.Save("${filepath.replace(/\\/g, '\\\\')}")
-      $graphics.Dispose()
-      $bitmap.Dispose()
-      
-      Write-Output "OK"
-    `;
-    
-    await execPromise(`powershell -Command "${psScript.replace(/\n/g, ' ')}"`);
+    // O script vai codificado, com as linhas intactas. Colá-lo dentro de
+    // `powershell -Command "..."` perdia as aspas do caminho e juntava tudo
+    // numa linha só, e a captura falhava sempre. Ver agents/powershell.js.
+    await powershell.correr(`
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$bitmap = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$graphics.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
+$bitmap.Save(${powershell.comPlicas(filepath)}, [System.Drawing.Imaging.ImageFormat]::Png)
+$graphics.Dispose()
+$bitmap.Dispose()
+Write-Output 'OK'
+`);
+
+    if (!fs.existsSync(filepath)) {
+      throw new Error('o PowerShell não deu erro mas o ficheiro não apareceu');
+    }
     
     logAction('SCREENSHOT', { file: filename, window: context.window });
     

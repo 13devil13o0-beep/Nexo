@@ -136,6 +136,7 @@ class MyBotApp {
     this.setupElectronEvents();
     this.setupKeyboardShortcuts();
     this.setupSelecaoDeMensagens();
+    this.vigiarScroll();
 
     // Conectar ao Core
     await this.connectToCore();
@@ -335,6 +336,7 @@ class MyBotApp {
         break;
         
       case 'chat_response':
+        this.pararVigia();
         this.removeTypingIndicator();
         // Limpar placeholder de streaming se existir (para intents não-streaming)
         if (this._streamingDiv) {
@@ -345,27 +347,32 @@ class MyBotApp {
         const responseText = message.data?.response || message.data?.text || '';
         if (responseText) {
           this.addMessage('bot', responseText);
-          
+
           // TTS se ativado — usar speakableText ou responseText
           const ttsText = message.data?.speakableText || responseText;
           this.speak(ttsText);
         }
         break;
-      
+
+      case 'stream_status':
+        // O NEXO foi buscar alguma coisa. Segundos de ecrã parado parecem
+        // avaria, e dizer o que se está a fazer custa nada.
+        this.aoSinalDoCore();
+        this.mostrarProgresso(message.data?.texto);
+        break;
+
       case 'stream_token':
-        // Token de streaming — acumular e atualizar placeholder
+        this.aoSinalDoCore();
         if (this._streamingDiv) {
           this._streamingText = (this._streamingText || '') + (message.data?.token || '');
-          const content = this._streamingDiv.querySelector('.message-content');
-          if (content) {
-            content.innerHTML = this.formatMessage(this._streamingText) + '<span class="streaming-cursor">▊</span>';
-          }
-          this.elements.messagesArea.scrollTop = this.elements.messagesArea.scrollHeight;
+          this.pedirDesenho();
         }
         break;
-      
+
       case 'stream_done':
-        // Streaming terminado — finalizar mensagem
+        this.pararVigia();
+        this.cancelarDesenho();
+        // Streaming terminado — agora sim, o markdown por inteiro, uma vez só.
         if (this._streamingDiv && this._streamingText) {
           const content = this._streamingDiv.querySelector('.message-content');
           if (content) {
@@ -385,18 +392,25 @@ class MyBotApp {
               pre.appendChild(btn);
             });
           }
+          this._streamingDiv.classList.remove('streaming');
           this._streamingDiv._textoOriginal = this._streamingText;
           this.speak(this._streamingText);
+        } else if (this._streamingDiv) {
+          // Chegou o fim sem uma única palavra. Deixar o balão vazio com o
+          // cursor a piscar é a pior resposta possível: ninguém sabe se ainda
+          // vem alguma coisa.
+          this.responderComFalha('Não veio resposta nenhuma. Tenta outra vez.');
         }
         this._streamingDiv = null;
         this._streamingText = '';
         break;
-        
+
       case 'error':
+        this.pararVigia();
+        this.cancelarDesenho();
         this.removeTypingIndicator();
         if (this._streamingDiv) {
-          const content = this._streamingDiv.querySelector('.message-content');
-          if (content) content.innerHTML = `❌ ${message.data?.message || 'Erro'}`;
+          this.responderComFalha(message.data?.message || 'Erro desconhecido');
           this._streamingDiv = null;
           this._streamingText = '';
         } else {
@@ -612,6 +626,175 @@ class MyBotApp {
     });
   }
   
+  // ═══════════════════════════════════════════════════════════
+  // A RESPOSTA A CHEGAR: SEM CINTILAR E SEM FICAR PENDURADA
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * Quanto silêncio se aceita antes de assumir que não vem nada.
+   *
+   * Não é o tempo total: cada token ou sinal de trabalho rearma a contagem.
+   * Uma resposta longa demora o que tiver de demorar. O que não pode é o Core
+   * calar-se e o ecrã ficar à espera para sempre, que foi o que aconteceu.
+   */
+  static get ESPERA_MAXIMA_MS() { return 60000; }
+
+  armarVigia() {
+    this.pararVigia();
+    this._vigia = setTimeout(() => this.semRespostaDoCore(), MyBotApp.ESPERA_MAXIMA_MS);
+  }
+
+  /** Chegou sinal de vida: a contagem recomeça. */
+  aoSinalDoCore() {
+    if (this._vigia) this.armarVigia();
+  }
+
+  pararVigia() {
+    if (this._vigia) clearTimeout(this._vigia);
+    this._vigia = null;
+  }
+
+  semRespostaDoCore() {
+    this._vigia = null;
+    this.cancelarDesenho();
+    this.removeTypingIndicator();
+    if (!this._streamingDiv) return;
+
+    const segundos = Math.round(MyBotApp.ESPERA_MAXIMA_MS / 1000);
+    this.responderComFalha(
+      this._streamingText
+        ? `A resposta parou a meio e passaram ${segundos}s sem mais nada.`
+        : `O NEXO não respondeu em ${segundos}s.`
+    );
+    this._streamingDiv = null;
+    this._streamingText = '';
+  }
+
+  /**
+   * Transforma o balão à espera numa mensagem que se percebe, com um botão
+   * para repetir. Um erro explicado vale mais do que um cursor a piscar.
+   */
+  responderComFalha(motivo) {
+    const div = this._streamingDiv;
+    if (!div) return;
+
+    const content = div.querySelector('.message-content');
+    if (!content) return;
+
+    div.classList.remove('streaming');
+    content.innerHTML = '';
+
+    const linha = document.createElement('div');
+    linha.textContent = `⚠️ ${motivo}`;
+    content.appendChild(linha);
+
+    if (this._ultimoEnvio) {
+      const repetir = document.createElement('button');
+      repetir.className = 'msg-action-btn repetir-btn';
+      repetir.textContent = '🔄 Tentar outra vez';
+      repetir.addEventListener('click', () => {
+        const { texto, ficheiro } = this._ultimoEnvio;
+        div.remove();
+        this.sendTextMessage(texto, ficheiro);
+      });
+      content.appendChild(repetir);
+    }
+
+    // O que já tinha chegado não se deita fora.
+    if (this._streamingText) {
+      const parcial = document.createElement('div');
+      parcial.className = 'stream-texto';
+      parcial.textContent = this._streamingText;
+      content.appendChild(parcial);
+      div._textoOriginal = this._streamingText;
+    }
+  }
+
+  /**
+   * Desenhar no máximo uma vez por fotograma.
+   *
+   * Antes, cada token reescrevia a mensagem inteira: o markdown era
+   * reinterpretado, as tabelas e os blocos de código destruídos e
+   * reconstruídos, e o realce de sintaxe corria outra vez. Centenas de vezes
+   * por resposta. Era isso que fazia o ecrã cintilar.
+   */
+  pedirDesenho() {
+    if (this._desenhoPedido) return;
+    this._desenhoPedido = requestAnimationFrame(() => {
+      this._desenhoPedido = null;
+      this.desenharStreaming();
+    });
+  }
+
+  cancelarDesenho() {
+    if (this._desenhoPedido) cancelAnimationFrame(this._desenhoPedido);
+    this._desenhoPedido = null;
+  }
+
+  /** Garante os três pedaços do balão: texto, estado e cursor. */
+  estruturaDoStreaming() {
+    const content = this._streamingDiv?.querySelector('.message-content');
+    if (!content) return null;
+
+    let corpo = content.querySelector('.stream-texto');
+    if (!corpo) {
+      content.innerHTML = '';
+      corpo = document.createElement('div');
+      corpo.className = 'stream-texto';
+      content.appendChild(corpo);
+
+      const cursor = document.createElement('span');
+      cursor.className = 'streaming-cursor';
+      content.appendChild(cursor);
+    }
+    return { content, corpo };
+  }
+
+  desenharStreaming() {
+    const partes = this.estruturaDoStreaming();
+    if (!partes) return;
+    // Texto simples durante a resposta. O markdown fica para o fim, uma vez só.
+    partes.corpo.textContent = this._streamingText || '';
+    this.acompanharFundo();
+  }
+
+  mostrarProgresso(texto) {
+    if (!texto) return;
+    const partes = this.estruturaDoStreaming();
+    if (!partes) return;
+
+    let estado = partes.content.querySelector('.stream-estado');
+    if (!estado) {
+      estado = document.createElement('div');
+      estado.className = 'stream-estado';
+      partes.content.appendChild(estado);
+    }
+    estado.textContent = texto;
+    this.acompanharFundo();
+  }
+
+  /**
+   * Acompanhar o fundo só se o utilizador já lá estava.
+   *
+   * Forçar o scroll a cada token arrancava a leitura das mãos de quem tinha
+   * subido para reler qualquer coisa.
+   */
+  acompanharFundo() {
+    const area = this.elements.messagesArea;
+    if (!area || this._coladoAoFundo === false) return;
+    area.scrollTop = area.scrollHeight;
+  }
+
+  vigiarScroll() {
+    const area = this.elements.messagesArea;
+    if (!area) return;
+    this._coladoAoFundo = true;
+    area.addEventListener('scroll', () => {
+      const distancia = area.scrollHeight - area.scrollTop - area.clientHeight;
+      this._coladoAoFundo = distancia < 60;
+    });
+  }
+
   // ═══════════════════════════════════════════════════════════
   // MARCAR E COPIAR MENSAGENS
   // ═══════════════════════════════════════════════════════════
@@ -1120,16 +1303,27 @@ class MyBotApp {
     if (!this.pendingFile) {
       this.addMessage('user', text);
     }
-    
+
+    // Guardado para o botão de repetir, quando a resposta não chega.
+    this._ultimoEnvio = { texto: text, ficheiro };
+
+    // Quem acaba de enviar quer ver o que enviou, mesmo que estivesse a ler
+    // mais acima. É o único momento em que se força a descida.
+    this._coladoAoFundo = true;
+    this.acompanharFundo();
+
     // Decidir se usa streaming (chat simples) ou rota normal (comandos)
     const isCommand = /^(executa|run:|listar|cria um pdf|status|ajuda|help)/i.test(text);
-    
+
     // Enviar para o Core
     try {
       if (this.ws?.readyState === WebSocket.OPEN) {
         const requestId = Date.now().toString();
         this.pendingRequestId = requestId;
-        
+        // A partir daqui há alguém à espera. Se o Core se calar, o vigia
+        // transforma isto numa mensagem em vez de um cursor eterno.
+        this.armarVigia();
+
         if (!isCommand) {
           // Streaming via WebSocket — criar placeholder para tokens
           this._streamingDiv = this.createStreamingMessage();
@@ -1159,7 +1353,9 @@ class MyBotApp {
           }));
         }
       } else {
-        // Via HTTP fallback
+        // Via HTTP fallback, também com prazo: sem ele, um Core que atende e
+        // adormece deixa o ecrã à espera sem fim nem explicação.
+        this.showTypingIndicator();
         const response = await fetch(`${this.apiUrl}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1167,7 +1363,8 @@ class MyBotApp {
             message: text,
             conversationId: this.currentConversationId,
             ficheiro
-          })
+          }),
+          signal: AbortSignal.timeout(MyBotApp.ESPERA_MAXIMA_MS * 2)
         });
         
         const data = await response.json();
@@ -1189,11 +1386,19 @@ class MyBotApp {
       setTimeout(() => this.loadConversations(), 1000);
       
     } catch (error) {
+      this.pararVigia();
+      this.cancelarDesenho();
       this.removeTypingIndicator();
-      this.addMessage('bot', `❌ Erro de conexão: ${error.message}\n\nVerifica se o Core está a correr (npm run core)`);
+      if (this._streamingDiv) {
+        this.responderComFalha(`Erro de ligação: ${error.message}`);
+        this._streamingDiv = null;
+        this._streamingText = '';
+      } else {
+        this.addMessage('bot', `❌ Erro de conexão: ${error.message}\n\nVerifica se o Core está a correr (npm run core)`);
+      }
     }
   }
-  
+
   addMessage(role, content, scroll = true) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${role}`;
@@ -1232,7 +1437,7 @@ class MyBotApp {
     this.elements.messagesContainer.appendChild(messageDiv);
     
     if (scroll) {
-      this.elements.messagesArea.scrollTop = this.elements.messagesArea.scrollHeight;
+      this.acompanharFundo();
     }
   }
   
@@ -1298,7 +1503,7 @@ class MyBotApp {
     `;
     
     this.elements.messagesContainer.appendChild(indicator);
-    this.elements.messagesArea.scrollTop = this.elements.messagesArea.scrollHeight;
+    this.acompanharFundo();
   }
   
   removeTypingIndicator() {
@@ -1323,7 +1528,7 @@ class MyBotApp {
         <span class="message-avatar">🤖</span>
         <span class="message-sender">NEXO</span>
       </div>
-      <div class="message-content"><span class="streaming-cursor">▊</span></div>
+      <div class="message-content"><div class="stream-texto"></div><span class="streaming-cursor"></span></div>
       <div class="message-footer">
         <span class="message-time">${time}</span>
         <div class="message-actions">
@@ -1337,7 +1542,7 @@ class MyBotApp {
     });
     
     this.elements.messagesContainer.appendChild(messageDiv);
-    this.elements.messagesArea.scrollTop = this.elements.messagesArea.scrollHeight;
+    this.acompanharFundo();
     
     return messageDiv;
   }

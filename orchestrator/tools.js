@@ -132,52 +132,63 @@ const FERRAMENTAS = [
     executar: async ({ titulo, conteudo }) => comoTexto(fileAgent.createNote(titulo, conteudo))
   },
 
+  // As ferramentas de ficheiros passaram do fileAgent para o systemAgent.
+  //
+  // O fileAgent só alcança três pastas dentro do projecto: Documentos, outputs
+  // e temp. Era essa a razão de "lista os ficheiros do projeto" responder que
+  // havia dez. O systemAgent alcança o que o utilizador autorizou de facto, a
+  // pasta do projecto incluída, e é ele que a barreira de permissões cobre.
   {
     nome: 'listar_ficheiros',
     risco: 'ler',
-    palavras: ['ficheiros', 'documentos', 'que ficheiros', 'lista de ficheiros', 'pasta'],
-    descricao: 'Lista os ficheiros das pastas que o utilizador autorizou.',
+    palavras: ['ficheiros', 'documentos', 'que ficheiros', 'lista de ficheiros', 'pasta',
+               'diretorio', 'directorio', 'lista a pasta', 'conteudo da pasta', 'projeto', 'projecto'],
+    descricao: 'Lista o que está dentro de uma pasta: ficheiros e subpastas, com tamanhos. Usa isto antes de ler ou procurar, para saberes o que lá existe. Deixa o caminho vazio para a pasta do projecto NEXO.',
     parametros: {
       type: 'object',
       properties: {
-        pasta: { type: 'string', description: 'Pasta a listar. Deixa vazio para a pasta de documentos.' }
+        pasta: { type: 'string', description: 'Caminho da pasta. Vazio ou "." para a pasta do projecto NEXO. Aceita ~ para a pasta pessoal.' }
       },
       required: [],
       additionalProperties: false
     },
-    executar: async ({ pasta }) => comoTexto(fileAgent.listFiles(pasta || null))
+    executar: async ({ pasta }) => comoTexto(systemAgent.listDirectory(pasta || '.'))
   },
 
   {
     nome: 'ler_ficheiro',
     risco: 'ler',
-    palavras: ['le o ficheiro', 'ler ficheiro', 'abre o ficheiro', 'conteudo do ficheiro', 'o que diz'],
-    descricao: 'Lê o conteúdo de um ficheiro de texto, dentro das pastas autorizadas.',
+    palavras: ['le o ficheiro', 'ler ficheiro', 'abre o ficheiro', 'conteudo do ficheiro',
+               'o que diz', 'codigo de', 've o ficheiro', 'analisa o ficheiro'],
+    descricao: 'Lê um ficheiro de texto do princípio ao fim: código, configuração, notas, registos. Usa isto em vez de pedir ao utilizador que te cole o conteúdo.',
     parametros: {
       type: 'object',
       properties: {
-        caminho: { type: 'string', description: 'Caminho ou nome do ficheiro.' }
+        caminho: { type: 'string', description: 'Caminho do ficheiro. Aceita caminho relativo à pasta do projecto e ~ para a pasta pessoal.' }
       },
       required: ['caminho'],
       additionalProperties: false
     },
-    executar: async ({ caminho }) => comoTexto(fileAgent.readFile(caminho))
+    executar: async ({ caminho }) => comoTexto(systemAgent.readFile(caminho))
   },
 
   {
-    nome: 'listar_pasta',
+    nome: 'procurar_em_ficheiros',
     risco: 'ler',
-    palavras: ['diretorio', 'directorio', 'lista a pasta', 'conteudo da pasta'],
-    descricao: 'Lista o conteúdo de uma directoria do sistema, dentro dos caminhos permitidos.',
+    palavras: ['procura no codigo', 'onde esta', 'em que ficheiro', 'analisa o codigo',
+               'onde e que', 'encontra no projeto', 'encontra no projecto', 'grep',
+               'em que parte do codigo', 'procura dentro'],
+    descricao: 'Procura um texto dentro de todos os ficheiros de uma pasta e das suas subpastas, e devolve ficheiro, linha e o que lá está escrito. É assim que se investiga um projecto sem o utilizador ter de colar nada. Salta node_modules e pastas de build.',
     parametros: {
       type: 'object',
       properties: {
-        caminho: { type: 'string', description: 'Caminho da directoria.' }
+        termo: { type: 'string', description: 'Texto a procurar. Sem expressões regulares, e não distingue maiúsculas.' },
+        pasta: { type: 'string', description: 'Onde procurar. Vazio ou "." para a pasta do projecto NEXO.' }
       },
-      required: ['caminho'],
+      required: ['termo'],
       additionalProperties: false
     },
-    executar: async ({ caminho }) => comoTexto(systemAgent.listDirectory(caminho))
+    executar: async ({ termo, pasta }) => comoTexto(systemAgent.procurarEmFicheiros(termo, pasta || '.'))
   },
 
   {
@@ -299,8 +310,98 @@ const FERRAMENTAS = [
   }
 ];
 
-/** Conjunto usado quando nenhuma palavra da mensagem aponta para nada. */
-const PADRAO = ['pesquisar_web', 'executar_codigo', 'data_e_hora', 'recordar', 'listar_ficheiros'];
+/**
+ * Conjunto usado quando nenhuma palavra da mensagem aponta para nada.
+ *
+ * As ferramentas de ficheiros estão aqui de propósito. Um pedido escrito em
+ * linguagem normal muitas vezes não tem palavra nenhuma do pré-filtro, e sem
+ * elas o NEXO ficava de mãos atadas e respondia que não podia ver nada. Quem
+ * está sentado na máquina do utilizador deve ter sempre como lá chegar.
+ */
+const PADRAO = [
+  'pesquisar_web',
+  'listar_ficheiros',
+  'ler_ficheiro',
+  'procurar_em_ficheiros',
+  'executar_codigo',
+  'data_e_hora'
+];
+
+/**
+ * O que dizer a quem está à espera enquanto a ferramenta corre.
+ *
+ * Ler uma pasta grande ou pesquisar na internet leva segundos, e segundos de
+ * ecrã parado parecem uma avaria. Dizer "a procurar nos teus ficheiros" custa
+ * nada e muda tudo para quem está do outro lado.
+ */
+const EM_CURSO = {
+  pesquisar_web: '🔍 a pesquisar na internet',
+  executar_codigo: '⚡ a calcular',
+  criar_pdf: '📄 a escrever o documento',
+  criar_nota: '📝 a gravar a nota',
+  listar_ficheiros: '📁 a ver os teus ficheiros',
+  ler_ficheiro: '📖 a ler o ficheiro',
+  procurar_em_ficheiros: '🔎 a procurar no código',
+  info_sistema: '🖥️ a ver o estado da máquina',
+  ver_area_transferencia: '📋 a ver a área de transferência',
+  analisar_ecra: '👁️ a olhar para o ecrã',
+  recordar: '🧠 a recordar',
+  pesquisar_documentos: '📚 a procurar nos teus documentos',
+  planear_rota: '🧭 a planear a rota',
+  simular_missao: '🚁 a simular a missão',
+  data_e_hora: '🕒 a ver as horas'
+};
+
+/** Frase para mostrar enquanto uma ferramenta corre. */
+function emCurso(nome) {
+  return EM_CURSO[nome] || `⚙️ a usar ${nome}`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// QUEM DECIDE: AS REGRAS OU O MODELO
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Intenções que o catálogo de ferramentas também sabe fazer, e melhor.
+ *
+ * O parser de regras apanha o pedido primeiro e, quando acerta na intenção mas
+ * erra na extracção, responde com confiança uma coisa sem sentido. Medido:
+ * "lista os ficheiros que tens na pasta do projeto" deu intenção
+ * system_list_dir com a palavra "pasta" tomada como nome da pasta, e a
+ * resposta foi "Pasta não encontrada: user_data\\pasta".
+ *
+ * Um modelo com o catálogo à frente lê a frase inteira e escolhe os argumentos
+ * com juízo. Nestas intenções, portanto, as regras cedem-lhe o lugar.
+ *
+ * O resto continua com as regras: criar lembretes, correr workflows, mudar de
+ * língua e outros comandos exactos não têm ferramenta equivalente, e para eles
+ * uma regra que casa é mais rápida e mais fiável do que uma conversa.
+ */
+const INTENCOES_COM_FERRAMENTA = new Set([
+  'web_search',
+  'run_code',
+  'list_files',
+  'system_info',
+  'system_list_dir',
+  'system_read_file',
+  'system_open_folder',
+  'current_time',
+  'current_date',
+  'recall',
+  'rag_search',
+  'clipboard_current',
+  'screenshot_analyze',
+  'screen_ocr',
+  'screen_errors'
+]);
+
+/**
+ * Este pedido fica melhor servido pelo modelo com ferramentas do que pela
+ * regra que o apanhou?
+ */
+function melhorComFerramentas(intent) {
+  return INTENCOES_COM_FERRAMENTA.has(intent);
+}
 
 // ═══════════════════════════════════════════════════════════
 // PRÉ-FILTRO
@@ -325,11 +426,26 @@ function seleccionar(mensagem, limite = MAX_FERRAMENTAS) {
     .filter(x => x.pontos > 0)
     .sort((a, b) => b.pontos - a.pontos);
 
-  if (pontuadas.length) {
-    return pontuadas.slice(0, limite).map(x => x.ferramenta);
+  const escolhidas = pontuadas.slice(0, limite).map(x => x.ferramenta);
+
+  // As básicas viajam sempre, mesmo quando outra pontuou.
+  //
+  // Bastava uma palavra acertar para as restantes ficarem de fora. Medido:
+  // "lê o package.json do projeto e diz-me a versão" pontuava em "projeto",
+  // levava listar_ficheiros e deixava ler_ficheiro em casa. O NEXO listou a
+  // pasta e respondeu "sem uma ferramenta para ler o ficheiro, não posso" —
+  // com a ferramenta a existir, a um passo de distância.
+  //
+  // Enquanto houver lugar, enche-se com o conjunto de base. Ordem mantida: o
+  // que pontuou continua à frente, que é o que o modelo lê primeiro.
+  for (const nome of PADRAO) {
+    if (escolhidas.length >= limite) break;
+    if (escolhidas.some(f => f.nome === nome)) continue;
+    const f = porNome(nome);
+    if (f) escolhidas.push(f);
   }
 
-  return FERRAMENTAS.filter(f => PADRAO.includes(f.nome)).slice(0, limite);
+  return escolhidas;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -387,5 +503,9 @@ module.exports = {
   executar,
   porNome,
   normalizar,
+  emCurso,
+  EM_CURSO,
+  melhorComFerramentas,
+  INTENCOES_COM_FERRAMENTA,
   MAX_FERRAMENTAS
 };

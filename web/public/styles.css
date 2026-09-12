@@ -823,16 +823,45 @@ body {
    STREAMING CURSOR
    ═══════════════════════════════════════════════════════════ */
 
+/* O cursor não pisca. Quem está a ler uma resposta a chegar quer ver o texto
+   a aparecer, não uma barra a bater ao lado dele. Fica uma marca parada, e
+   desaparece quando a resposta acaba. */
 .streaming-cursor {
-  display: inline;
-  color: var(--accent);
-  animation: blink 0.7s step-end infinite;
-  font-weight: bold;
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  opacity: 0.6;
+  border-radius: 2px;
 }
 
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+.message:not(.streaming) .streaming-cursor {
+  display: none;
+}
+
+/* O texto que vai chegando, ainda sem markdown: as quebras de linha contam. */
+.stream-texto {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* O que o NEXO está a fazer enquanto não escreve. */
+.stream-estado {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+
+.repetir-btn {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .message.streaming .message-content {

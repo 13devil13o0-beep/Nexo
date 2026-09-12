@@ -163,8 +163,23 @@ async function checkAll(ids) {
 /**
  * Só os problemas que exigem acção: fornecedor configurado cujo modelo morreu.
  */
+/**
+ * O modelo local é opcional, e um opcional ausente não é um problema.
+ *
+ * O Ollama só corre se o utilizador o arrancar num terminal e o deixar aberto.
+ * Quem não o quer não tem de ver um aviso vermelho em cada arranque por causa
+ * de um serviço que nunca pediu. Um aviso que aparece sempre deixa de ser
+ * lido, e quando aparecer um a sério passa despercebido.
+ */
+function opcionalEAusente(r) {
+  const id = String(r.id || r.name || '').toLowerCase();
+  return id === 'ollama' && r.status === STATUS.UNREACHABLE && process.env.OLLAMA_SEMPRE !== '1';
+}
+
 function problems(results) {
-  return results.filter(r => r.status === STATUS.STALE || r.status === STATUS.UNREACHABLE);
+  return results
+    .filter(r => r.status === STATUS.STALE || r.status === STATUS.UNREACHABLE)
+    .filter(r => !opcionalEAusente(r));
 }
 
 
@@ -244,6 +259,12 @@ function formatReport(results) {
   const lines = ['', '🩺 Sentinela de modelos', ''];
 
   for (const r of results) {
+    // O local ausente não é uma avaria: é um opcional que ninguém arrancou.
+    if (opcionalEAusente(r)) {
+      lines.push(`⚪ ${r.name.padEnd(14)} desligado (opcional — corre "ollama serve" se o quiseres)`);
+      continue;
+    }
+
     lines.push(`${ICON[r.status]} ${r.name.padEnd(14)} ${LABEL[r.status]}`);
 
     if (r.status === STATUS.STALE) {

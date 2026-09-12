@@ -18,6 +18,7 @@ require('dotenv').config();
 const customProvider = require('../agents/customProvider');
 const metrics = require('./metrics');
 const anthropicAdapter = require('../nexo/adapters/anthropic');
+const prazo = require('./prazo');
 
 // ═══════════════════════════════════════════════════════════
 // CONFIGURAÇÃO DOS PROVIDERS
@@ -73,9 +74,13 @@ const PROVIDERS = {
     name: 'Cerebras',
     baseUrl: 'https://api.cerebras.ai/v1',
     keyEnv: 'CEREBRAS_API_KEY',
-    model: 'llama-3.3-70b',
+    // Os llama-3.x foram retirados pelo Cerebras. A sentinela avisava disso
+    // em cada arranque e ninguém agia: o segundo motor da cadeia estava morto
+    // há semanas, e uma falha do Groq não tinha para onde ir.
+    // Confirmado em /v1/models: gpt-oss-120b, qwen-3.8-27b, gemma-4-31b.
+    model: process.env.CEREBRAS_MODEL || 'gpt-oss-120b',
     supportsTools: true,
-    fallbackModel: 'llama-3.1-8b',
+    fallbackModel: process.env.CEREBRAS_FALLBACK_MODEL || 'qwen-3.8-27b',
     maxTokens: 4096,
     supportsStreaming: true,
     supportsVision: false,
@@ -189,27 +194,62 @@ function setCooldown(providerId) {
 // ═══════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════
-// ENCAMINHAMENTO POR TAMANHO DO PROMPT
+// O MODELO LOCAL É UM PEDIDO, NÃO UMA OMISSÃO
 // ═══════════════════════════════════════════════════════════
 
 /**
- * O modelo local é gratuito e privado, mas processa o prompt no processador.
- * Medido nesta máquina: 2,3 s de custo fixo mais 49 ms por token de entrada.
+ * O Ollama estava à frente nos pedidos curtos, por ser gratuito e privado.
+ * Só que ele não está a correr a não ser que alguém o tenha arrancado num
+ * terminal e o deixe aberto. O resultado media-se no registo: "Stream Ollama
+ * falhou: fetch failed" antes de cada resposta, uma ligação recusada a atrasar
+ * todas as mensagens. Um caminho que quase nunca serve não pode ser o primeiro.
  *
- *    100 tokens →  7 s        400 tokens → 22 s
- *    150 tokens → 10 s        900 tokens → 46 s
- *
- * Um serviço remoto responde a qualquer destes em menos de meio segundo.
- * Por isso os pedidos curtos ficam em casa, de graça e sem sair da máquina,
- * e só os longos saem. Não é encaminhamento por dificuldade: é por tamanho,
- * que se mede sem gastar nada. A dificuldade fica para a cascata com
- * ferramentas.
- *
- * Ajusta o limiar com LOCAL_MAX_PROMPT_TOKENS. Se a tua máquina tiver placa
- * gráfica, sobe-o. Mede primeiro com "npm run metrics".
+ * Agora o local só entra quando é pedido. E quando é pedido, é pedido a sério:
+ * quem escreve "responde em modo local" quer privacidade, e mandar a pergunta
+ * para a nuvem porque o Ollama não atendeu seria trair exactamente aquilo que
+ * pediu. Falha com uma explicação, não com um desvio calado.
  */
 const LOCAL_PROVIDER_IDS = new Set(['ollama']);
-const LOCAL_MAX_PROMPT_TOKENS = parseInt(process.env.LOCAL_MAX_PROMPT_TOKENS) || 150;
+
+/** Palavras com que alguém pede que a conversa não saia da máquina. */
+const PEDIDOS_DE_LOCAL = [
+  'ollama',
+  'modo local',
+  'so local',
+  'apenas local',
+  'localmente',
+  'offline',
+  'sem internet',
+  'em privado',
+  'privacidade total',
+  'sem sair do meu computador',
+  'sem sair da maquina'
+];
+
+function semAcentos(texto) {
+  return String(texto || '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase();
+}
+
+/**
+ * O utilizador pediu o modelo local para este pedido?
+ *
+ * Ou disse-o por palavras na mensagem, ou quem chamou marcou options.local.
+ * O OLLAMA_SEMPRE=1 existe para quem o tem sempre ligado e não quer repetir-se.
+ */
+function querLocal(messages, options = {}) {
+  if (options.local === true) return true;
+  if (options.local === false) return false;
+  if (process.env.OLLAMA_SEMPRE === '1') return true;
+
+  const ultima = [...(messages || [])].reverse().find(m => m?.role === 'user');
+  if (!ultima) return false;
+
+  const texto = semAcentos(ultima.content);
+  return PEDIDOS_DE_LOCAL.some(p => texto.includes(semAcentos(p)));
+}
 
 /**
  * Estimativa de tokens sem contactar ninguém. Quatro caracteres por token é
@@ -222,22 +262,34 @@ function estimatePromptTokens(messages) {
 }
 
 /**
- * Reordena a cadeia conforme o tamanho, respeitando a ordem que o utilizador
- * definiu dentro de cada grupo. Nada é removido: se o preferido falhar, o
- * outro continua a ser tentado a seguir.
+ * Escolhe com quem falar, pela ordem que o utilizador definiu no .env.
+ *
+ * Sem pedido de local, o Ollama sai da cadeia: não vale gastar uma ligação
+ * recusada antes de cada resposta. Com pedido de local, é o único que fica,
+ * para a pergunta não acabar na nuvem depois de alguém ter pedido privacidade.
  */
-function orderProvidersByPromptSize(providers, messages) {
+function escolherCadeia(providers, messages, options = {}) {
   const local = providers.filter(p => LOCAL_PROVIDER_IDS.has(p.id));
-  const remote = providers.filter(p => !LOCAL_PROVIDER_IDS.has(p.id));
+  const remoto = providers.filter(p => !LOCAL_PROVIDER_IDS.has(p.id));
 
-  // Só há um grupo: não há decisão a tomar.
-  if (!local.length || !remote.length) return providers;
+  if (querLocal(messages, options)) {
+    console.log('  🏠 Pedido em modo local: só o modelo desta máquina responde.');
+    return local;
+  }
 
-  const tokens = estimatePromptTokens(messages);
-  const keepLocal = tokens <= LOCAL_MAX_PROMPT_TOKENS;
+  return remoto;
+}
 
-  console.log(`  🧭 ~${tokens} tokens → ${keepLocal ? 'local' : 'remoto'} primeiro`);
-  return keepLocal ? [...local, ...remote] : [...remote, ...local];
+/** Resposta para quem pediu o local e o local não estava lá. */
+function semLocal() {
+  return {
+    text: '🏠 Pediste que isto ficasse só nesta máquina, mas o Ollama não está a responder.\n\n' +
+          'Abre um terminal, corre `ollama serve` e deixa-o aberto. Depois repete o pedido.\n\n' +
+          'Não mandei a tua pergunta para a internet: pediste privacidade e isso respeita-se.',
+    provider: null,
+    success: false,
+    localIndisponivel: true
+  };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -350,7 +402,8 @@ async function chatInternal(messages, options = {}) {
     console.warn('  ⚠️ Provider personalizado falhou, a usar a cadeia gratuita...');
   }
 
-  let providers = orderProvidersByPromptSize(getAvailableProviders(), messages);
+  const emLocal = querLocal(messages, options);
+  let providers = escolherCadeia(getAvailableProviders(), messages, options);
 
   // Com ferramentas em jogo, só interessam os fornecedores que as suportam.
   // O modelo local não suporta, e mandar-lhe ferramentas fá-lo-ia ignorá-las
@@ -385,6 +438,11 @@ async function chatInternal(messages, options = {}) {
       setCooldown(provider.id);
     }
   }
+
+  // Pedido em modo local que não deu: acaba aqui. Escalar para um serviço
+  // remoto, pago ou grátis, seria mandar para fora o que foi pedido para
+  // ficar dentro de casa.
+  if (emLocal) return semLocal();
 
   // ══ ÚLTIMO RECURSO: escalar para o nível pago ══
   if (!customFirst && customServe && hasCustomTier(options)) {
@@ -491,15 +549,25 @@ async function chatStreamInternal(messages, onToken, onDone, options = {}) {
     return;
   }
 
-  const providers = orderProvidersByPromptSize(
+  const emLocal = querLocal(messages, options);
+  let providers = escolherCadeia(
     getAvailableProviders().filter(p => p.supportsStreaming),
-    messages
+    messages,
+    options
   );
-  
+
+  // Com ferramentas em jogo, só quem as sabe usar serve. O modelo local
+  // ignorá-las-ia em silêncio e responderia texto solto.
+  if (Array.isArray(options.tools) && options.tools.length) {
+    providers = providers.filter(p => p.supportsTools);
+    if (!providers.length) {
+      onDone('', { noToolProvider: true, _recorded: true });
+      return;
+    }
+  }
+
   if (providers.length === 0) {
-    const fallback = await chat(messages, options);
-    onToken(fallback.text);
-    onDone(fallback.text, { ...fallback, _recorded: true });
+    entregarReserva(await chat(messages, options), onToken, onDone);
     return;
   }
 
@@ -512,16 +580,39 @@ async function chatStreamInternal(messages, onToken, onDone, options = {}) {
     }
   }
 
-  // Tentar cada provider
+  // Tentar cada provider.
+  //
+  // Uma falha a meio do caminho não se trata como uma falha antes de começar.
+  // Se já foi texto para o ecrã, passar ao fornecedor seguinte escreveria a
+  // resposta duas vezes, uma por cima da outra. Nesse caso pára-se e diz-se
+  // que a resposta ficou a meio, que é a verdade.
+  let escrito = '';
+  const vigiado = (token) => { escrito += token; onToken(token); };
+
   for (const provider of providers) {
     if (isInCooldown(provider.id)) continue;
-    
+
     try {
-      return await streamFromProvider(provider.id, messages, onToken, onDone, options);
+      return await streamFromProvider(provider.id, messages, vigiado, onDone, options);
     } catch (error) {
       console.error(`  ❌ Stream ${provider.name} falhou: ${error.message}`);
       setCooldown(provider.id);
+
+      if (escrito) {
+        const aviso = `\n\n_(a resposta ficou a meio: ${error.message})_`;
+        onToken(aviso);
+        onDone(escrito + aviso, { provider: provider.name, interrompido: true });
+        return;
+      }
     }
+  }
+
+  // Pedido em modo local que não deu: não se desvia para a nuvem.
+  if (emLocal) {
+    const recado = semLocal();
+    onToken(recado.text);
+    onDone(recado.text, { ...recado, _recorded: true });
+    return;
   }
 
   // ══ ÚLTIMO RECURSO: escalar para o nível pago ══
@@ -531,9 +622,24 @@ async function chatStreamInternal(messages, onToken, onDone, options = {}) {
   }
 
   // Nenhum streaming disponível — fallback síncrono
-  const fallback = await chat(messages, options);
-  onToken(fallback.text);
-  onDone(fallback.text, { ...fallback, _recorded: true });
+  entregarReserva(await chat(messages, options), onToken, onDone);
+}
+
+/**
+ * A resposta de reserva, quando não houve streaming possível.
+ *
+ * Uma falha não se entrega como se fosse resposta. O "todos os providers
+ * falharam" era escrito no ecrã token a token, com o aspecto de uma resposta
+ * normal. Quem chamava não tinha maneira de saber que aquilo era um erro, e o
+ * ciclo de ferramentas deitava fora tudo o que já tinha ido buscar por pensar
+ * que a resposta estava dada. Uma falha tem de ser lançada.
+ */
+function entregarReserva(resultado, onToken, onDone) {
+  if (resultado.success === false || !resultado.provider) {
+    throw new Error(resultado.text || 'Nenhum fornecedor de IA respondeu');
+  }
+  onToken(resultado.text);
+  onDone(resultado.text, { ...resultado, _recorded: true });
 }
 
 /**
@@ -566,7 +672,13 @@ async function streamFromProvider(providerId, messages, onToken, onDone, options
 
   switch (provider.format) {
     case 'openai':
-      return await streamOpenAICompatible(provider, providerId, apiKey, messages, onToken, onDone, { model, maxTokens, temperature });
+      // As ferramentas seguem também no streaming: é isso que permite ao NEXO
+      // ir buscar o que precisa sem deixar de escrever à medida que pensa.
+      return await streamOpenAICompatible(provider, providerId, apiKey, messages, onToken, onDone, {
+        model, maxTokens, temperature,
+        tools: options.tools,
+        toolChoice: options.toolChoice
+      });
     case 'gemini':
       return await streamGemini(provider, providerId, apiKey, messages, onToken, onDone, { model, maxTokens, temperature });
     case 'ollama':
@@ -606,6 +718,27 @@ function buildOpenAIBody(provider, messages, opts, extra = {}) {
   return body;
 }
 
+/**
+ * Um pedido com prazo, corpo já lido.
+ *
+ * O corpo entra no prazo de propósito: uma ligação que atende e depois se cala
+ * a meio do corpo deixa o pedido tão pendurado como uma que nunca atendeu.
+ */
+async function pedirComPrazo(url, opcoes, etiqueta, ms = prazo.PRAZO_RESPOSTA_MS) {
+  const cronometro = prazo.relogio(ms, etiqueta);
+  try {
+    const resposta = await fetch(url, { ...opcoes, signal: cronometro.signal });
+    const texto = await resposta.text();
+    let json = null;
+    try { json = JSON.parse(texto); } catch {}
+    return { resposta, texto, json };
+  } catch (err) {
+    throw prazo.traduzirErro(err, cronometro, etiqueta);
+  } finally {
+    cronometro.parar();
+  }
+}
+
 async function callOpenAICompatible(provider, apiKey, messages, opts) {
   const fetchOpts = {
     method: 'POST',
@@ -618,22 +751,36 @@ async function callOpenAICompatible(provider, apiKey, messages, opts) {
   };
   if (dispatcher) fetchOpts.dispatcher = dispatcher;
 
-  const response = await fetch(`${provider.baseUrl}/chat/completions`, fetchOpts);
-  
-  if (!response.ok) {
-    const errText = await response.text();
-    if (response.status === 429) {
-      // Rate limit — tentar fallback model
-      if (opts.model !== provider.fallbackModel) {
-        console.warn(`  ⚠️ ${provider.name} rate limit, tentando ${provider.fallbackModel}...`);
-        return callOpenAICompatible(provider, apiKey, messages, { ...opts, model: provider.fallbackModel });
+  const cronometro = prazo.relogio(prazo.PRAZO_RESPOSTA_MS, provider.name);
+  fetchOpts.signal = cronometro.signal;
+
+  // O cronómetro só pára depois do corpo lido: uma resposta que abre a
+  // ligação e depois se cala a meio do corpo também é um pedido pendurado.
+  let response, data;
+  try {
+    response = await fetch(`${provider.baseUrl}/chat/completions`, fetchOpts);
+
+    if (!response.ok) {
+      const errText = await response.text();
+      if (response.status === 429) {
+        // Rate limit — tentar fallback model
+        if (opts.model !== provider.fallbackModel) {
+          console.warn(`  ⚠️ ${provider.name} rate limit, tentando ${provider.fallbackModel}...`);
+          cronometro.parar();
+          return callOpenAICompatible(provider, apiKey, messages, { ...opts, model: provider.fallbackModel });
+        }
+        setCooldown(provider.id);
       }
-      setCooldown(provider.id);
+      throw new Error(`${provider.name} ${response.status}: ${errText.substring(0, 200)}`);
     }
-    throw new Error(`${provider.name} ${response.status}: ${errText.substring(0, 200)}`);
+
+    data = await response.json();
+  } catch (err) {
+    throw prazo.traduzirErro(err, cronometro, provider.name);
+  } finally {
+    cronometro.parar();
   }
 
-  const data = await response.json();
   const mensagem = data.choices?.[0]?.message || {};
   const text = mensagem.content;
   const toolCalls = mensagem.tool_calls || null;
@@ -677,22 +824,20 @@ async function callGemini(provider, apiKey, messages, opts) {
   }
 
   const url = `${provider.baseUrl}/models/${opts.model}:generateContent?key=${apiKey}`;
-  const response = await fetch(url, {
+  const { resposta: response, texto: errText, json: data } = await pedirComPrazo(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
-  });
+  }, 'Gemini');
 
   if (!response.ok) {
-    const errText = await response.text();
     if (response.status === 429 && opts.model !== provider.fallbackModel) {
       return callGemini(provider, apiKey, messages, { ...opts, model: provider.fallbackModel });
     }
     throw new Error(`Gemini ${response.status}: ${errText.substring(0, 200)}`);
   }
 
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Gemini: resposta vazia');
 
   return {
@@ -700,7 +845,7 @@ async function callGemini(provider, apiKey, messages, opts) {
     text,
     provider: 'Gemini',
     model: opts.model,
-    tokens: data.usageMetadata || {}
+    tokens: data?.usageMetadata || {}
   };
 }
 
@@ -713,7 +858,7 @@ async function callHuggingFace(provider, apiKey, messages, opts) {
   }).join('\n') + '\n<|assistant|>\n';
 
   const url = `${provider.baseUrl}/${opts.model}`;
-  const response = await fetch(url, {
+  const { resposta: response, texto: errText, json: data } = await pedirComPrazo(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -727,17 +872,15 @@ async function callHuggingFace(provider, apiKey, messages, opts) {
         return_full_text: false
       }
     })
-  });
+  }, 'HuggingFace');
 
   if (!response.ok) {
-    const errText = await response.text();
     if (response.status === 429 && opts.model !== provider.fallbackModel) {
       return callHuggingFace(provider, apiKey, messages, { ...opts, model: provider.fallbackModel });
     }
     throw new Error(`HuggingFace ${response.status}: ${errText.substring(0, 200)}`);
   }
 
-  const data = await response.json();
   const text = Array.isArray(data) ? data[0]?.generated_text : data?.generated_text;
   if (!text) throw new Error('HuggingFace: resposta vazia');
 
@@ -747,7 +890,9 @@ async function callHuggingFace(provider, apiKey, messages, opts) {
 async function callOllama(provider, messages, opts) {
   const url = `${provider.baseUrl}/api/chat`;
   
-  const response = await fetch(url, {
+  // O modelo local pensa no processador e é lento por natureza. O prazo é o
+  // dobro do dos serviços remotos, senão uma resposta honesta seria cortada.
+  const { resposta: response, texto: errText, json: data } = await pedirComPrazo(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -763,18 +908,16 @@ async function callOllama(provider, messages, opts) {
         temperature: opts.temperature
       }
     })
-  });
+  }, 'Ollama', prazo.PRAZO_RESPOSTA_MS * 2);
 
   if (!response.ok) {
-    const errText = await response.text();
     if (opts.model !== provider.fallbackModel) {
       return callOllama(provider, messages, { ...opts, model: provider.fallbackModel });
     }
     throw new Error(`Ollama ${response.status}: ${errText.substring(0, 200)}`);
   }
 
-  const data = await response.json();
-  const text = data.message?.content;
+  const text = data?.message?.content;
   if (!text) throw new Error('Ollama: resposta vazia');
 
   // O Ollama devolve as contagens ao lado da mensagem — aproveitá-las
@@ -785,8 +928,8 @@ async function callOllama(provider, messages, opts) {
     provider: 'Ollama',
     model: opts.model,
     tokens: {
-      prompt_eval_count: data.prompt_eval_count,
-      eval_count: data.eval_count
+      prompt_eval_count: data?.prompt_eval_count,
+      eval_count: data?.eval_count
     }
   };
 }
@@ -811,46 +954,104 @@ async function streamOpenAICompatible(provider, providerId, apiKey, messages, on
   };
   if (dispatcher) fetchOpts.dispatcher = dispatcher;
 
-  const response = await fetch(`${provider.baseUrl}/chat/completions`, fetchOpts);
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`${provider.name} stream ${response.status}: ${errText.substring(0, 200)}`);
-  }
+  // Prazo por silêncio, não por duração. Uma resposta longa pode demorar um
+  // minuto com toda a legitimidade, e cortá-la ao cronómetro seria deitar
+  // fora texto bom. O que não pode é a ligação ficar muda.
+  const cronometro = prazo.relogio(prazo.PRAZO_SEM_SINAL_MS, `${provider.name} (streaming)`);
+  fetchOpts.signal = cronometro.signal;
 
   let fullText = '';
   let usage = null;
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+  const porChamar = new Map(); // índice → chamada de ferramenta em construção
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    const response = await fetch(`${provider.baseUrl}/chat/completions`, fetchOpts);
+    if (!response.ok) {
+      const errText = await response.text();
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
+      // Limite por minuto: o plano grátis do Groq são 8000 tokens por minuto,
+      // e um ciclo de ferramentas gasta-os depressa porque devolve ao modelo
+      // tudo o que as ferramentas leram. Trocar pelo modelo pequeno do mesmo
+      // fornecedor custa nada e responde, em vez de mandar a conversa abaixo.
+      if (response.status === 429 && provider.fallbackModel && opts.model !== provider.fallbackModel) {
+        console.warn(`  ⚠️ ${provider.name} no limite por minuto, a passar para ${provider.fallbackModel}...`);
+        cronometro.parar();
+        return streamOpenAICompatible(provider, providerId, apiKey, messages, onToken, onDone, {
+          ...opts, model: provider.fallbackModel
+        });
+      }
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data: ')) continue;
-      const payload = trimmed.slice(6);
-      if (payload === '[DONE]') continue;
-
-      try {
-        const json = JSON.parse(payload);
-        // Com stream_options.include_usage, o último chunk traz as contagens.
-        if (json.usage) usage = json.usage;
-        const token = json.choices?.[0]?.delta?.content;
-        if (token) {
-          fullText += token;
-          onToken(token);
-        }
-      } catch {}
+      throw new Error(`${provider.name} stream ${response.status}: ${errText.substring(0, 200)}`);
     }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      // Chegou sinal de vida: o prazo recomeça.
+      cronometro.adiar();
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+        const payload = trimmed.slice(6);
+        if (payload === '[DONE]') continue;
+
+        try {
+          const json = JSON.parse(payload);
+          // Com stream_options.include_usage, o último chunk traz as contagens.
+          if (json.usage) usage = json.usage;
+
+          const delta = json.choices?.[0]?.delta;
+          if (!delta) continue;
+
+          if (delta.content) {
+            fullText += delta.content;
+            onToken(delta.content);
+          }
+
+          // As ferramentas chegam aos bocados: o nome no primeiro pedaço e os
+          // argumentos letra a letra nos seguintes. Junta-se pelo índice.
+          if (Array.isArray(delta.tool_calls)) {
+            for (const parte of delta.tool_calls) {
+              const i = parte.index ?? 0;
+              if (!porChamar.has(i)) {
+                porChamar.set(i, { id: '', type: 'function', function: { name: '', arguments: '' } });
+              }
+              const chamada = porChamar.get(i);
+              if (parte.id) chamada.id = parte.id;
+              if (parte.function?.name) chamada.function.name += parte.function.name;
+              if (parte.function?.arguments) chamada.function.arguments += parte.function.arguments;
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    throw prazo.traduzirErro(err, cronometro, `${provider.name} (streaming)`);
+  } finally {
+    cronometro.parar();
   }
 
-  onDone(fullText, { provider: provider.name, model: opts.model, tokens: usage });
+  const toolCalls = porChamar.size ? [...porChamar.values()] : null;
+
+  onDone(fullText, {
+    provider: provider.name,
+    model: opts.model,
+    tokens: usage,
+    toolCalls,
+    // O turno do assistente tal como veio, para o ciclo de ferramentas o
+    // poder devolver ao modelo sem ele perder o fio.
+    raw: toolCalls ? { role: 'assistant', content: fullText || null, tool_calls: toolCalls } : undefined
+  });
 }
 
 async function streamGemini(provider, providerId, apiKey, messages, onToken, onDone, opts) {
@@ -874,46 +1075,58 @@ async function streamGemini(provider, providerId, apiKey, messages, onToken, onD
   }
 
   const url = `${provider.baseUrl}/models/${opts.model}:streamGenerateContent?alt=sse&key=${apiKey}`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini stream ${response.status}: ${errText.substring(0, 200)}`);
-  }
+  const cronometro = prazo.relogio(prazo.PRAZO_SEM_SINAL_MS, 'Gemini (streaming)');
 
   let fullText = '';
   let usage = null;
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: cronometro.signal
+    });
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data: ')) continue;
-      
-      try {
-        const json = JSON.parse(trimmed.slice(6));
-        // O Gemini repete usageMetadata em cada chunk; o último é o total.
-        if (json.usageMetadata) usage = json.usageMetadata;
-        const token = json.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (token) {
-          fullText += token;
-          onToken(token);
-        }
-      } catch {}
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Gemini stream ${response.status}: ${errText.substring(0, 200)}`);
     }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      cronometro.adiar();
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+        try {
+          const json = JSON.parse(trimmed.slice(6));
+          // O Gemini repete usageMetadata em cada chunk; o último é o total.
+          if (json.usageMetadata) usage = json.usageMetadata;
+          const token = json.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (token) {
+            fullText += token;
+            onToken(token);
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    throw prazo.traduzirErro(err, cronometro, 'Gemini (streaming)');
+  } finally {
+    cronometro.parar();
   }
 
   onDone(fullText, { provider: 'Gemini', model: opts.model, tokens: usage });
@@ -922,58 +1135,73 @@ async function streamGemini(provider, providerId, apiKey, messages, onToken, onD
 async function streamOllama(provider, providerId, messages, onToken, onDone, opts) {
   const url = `${provider.baseUrl}/api/chat`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: opts.model,
-      messages,
-      stream: true,
-
-      // Mantem o modelo residente: evita o arranque a frio de 105 s.
-
-      keep_alive: provider.keepAlive,
-      options: {
-        num_predict: opts.maxTokens,
-        temperature: opts.temperature
-      }
-    })
-  });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Ollama stream ${response.status}: ${errText.substring(0, 200)}`);
-  }
+  // O modelo local carrega para memória antes do primeiro token: a frio isso
+  // mede-se em minuto e meio. Dar-lhe o mesmo prazo de silêncio que a um
+  // serviço remoto seria desligá-lo sempre no arranque.
+  const cronometro = prazo.relogio(prazo.PRAZO_SEM_SINAL_MS * 5, 'Ollama (streaming)');
 
   let fullText = '';
   let usage = null;
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: opts.model,
+        messages,
+        stream: true,
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
+        // Mantem o modelo residente: evita o arranque a frio de 105 s.
 
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const json = JSON.parse(line);
-        // O chunk final do Ollama (done: true) traz as contagens.
-        if (json.done && (json.prompt_eval_count != null || json.eval_count != null)) {
-          usage = { prompt_eval_count: json.prompt_eval_count, eval_count: json.eval_count };
+        keep_alive: provider.keepAlive,
+        options: {
+          num_predict: opts.maxTokens,
+          temperature: opts.temperature
         }
-        const token = json.message?.content;
-        if (token) {
-          fullText += token;
-          onToken(token);
-        }
-      } catch {}
+      }),
+      signal: cronometro.signal
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Ollama stream ${response.status}: ${errText.substring(0, 200)}`);
     }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      cronometro.adiar();
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const json = JSON.parse(line);
+          // O chunk final do Ollama (done: true) traz as contagens.
+          if (json.done && (json.prompt_eval_count != null || json.eval_count != null)) {
+            usage = { prompt_eval_count: json.prompt_eval_count, eval_count: json.eval_count };
+          }
+          const token = json.message?.content;
+          if (token) {
+            fullText += token;
+            onToken(token);
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    throw prazo.traduzirErro(err, cronometro, 'Ollama (streaming)');
+  } finally {
+    cronometro.parar();
   }
 
   onDone(fullText, { provider: 'Ollama', model: opts.model, tokens: usage });
@@ -1035,6 +1263,9 @@ function warmupLocal() {
   if (order && !order.includes('ollama')) return;
 
   const started = Date.now();
+  // Aquecer é um favor, não uma obrigação. Se o Ollama não estiver a correr,
+  // isto tem de desistir depressa em vez de segurar o arranque do NEXO.
+  const cronometro = prazo.relogio(prazo.PRAZO_RESPOSTA_MS, 'Ollama');
   fetch(`${provider.baseUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1042,8 +1273,10 @@ function warmupLocal() {
       model: provider.model,
       messages: [],
       keep_alive: provider.keepAlive
-    })
+    }),
+    signal: cronometro.signal
   })
+    .finally(() => cronometro.parar())
     .then(res => {
       if (!res.ok) return;
       const secs = ((Date.now() - started) / 1000).toFixed(1);
@@ -1079,5 +1312,7 @@ module.exports = {
   isAvailable,
   customProviderMode,
   hasCustomTier,
+  querLocal,
+  escolherCadeia,
   PROVIDERS
 };

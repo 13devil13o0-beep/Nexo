@@ -25,18 +25,68 @@ function describe(name, fn) {
   fn();
 }
 
+// Testes assíncronos ainda a decorrer quando o ficheiro acaba de ser lido.
+const pendentes = [];
+
+/**
+ * Os assíncronos correm um a seguir ao outro, não todos ao mesmo tempo.
+ *
+ * Deixá-los à solta parecia inofensivo e não era: um teste que substitui algo
+ * partilhado, como o chatStream do router ou uma variável de ambiente, fazia
+ * o guião dele aparecer no meio de outro. Deu duas falhas que não eram do
+ * código, e podia ter dado o contrário — uma falha real escondida por um
+ * teste vizinho.
+ */
+let cadeia = Promise.resolve();
+
+function registarSucesso(name) {
+  passed++;
+  console.log(`  ✅ ${name}`);
+}
+
+function registarFalha(name, err) {
+  failed++;
+  console.log(`  ❌ ${name} → ${err.message}`);
+  failures.push({ name, error: err.message });
+}
+
+/**
+ * Um teste assíncrono não pode ser dado como passado antes de acabar.
+ *
+ * Isto chamava fn() sem esperar por nada: qualquer teste com async passava
+ * sempre, acertasse ou falhasse, porque a promessa só rebentava depois de o
+ * resultado já ter sido contado. Testes que não sabem falhar são piores do
+ * que não ter testes, porque dão confiança a mais.
+ */
 function test(name, fn) {
   totalTests++;
-  try {
-    fn();
-    passed++;
-    console.log(`  ✅ ${name}`);
-  } catch (err) {
-    failed++;
-    const msg = `  ❌ ${name} → ${err.message}`;
-    console.log(msg);
-    failures.push({ name, error: err.message });
+
+  // Um teste marcado como async entra na fila, mesmo antes de se saber se
+  // devolve promessa: chamá-lo já poria a correr o que deve esperar.
+  if (fn.constructor && fn.constructor.name === 'AsyncFunction') {
+    cadeia = cadeia
+      .then(() => fn())
+      .then(() => registarSucesso(name), (err) => registarFalha(name, err));
+    pendentes.push(cadeia);
+    return;
   }
+
+  let resultado;
+  try {
+    resultado = fn();
+  } catch (err) {
+    return registarFalha(name, err);
+  }
+
+  if (resultado && typeof resultado.then === 'function') {
+    cadeia = cadeia
+      .then(() => resultado)
+      .then(() => registarSucesso(name), (err) => registarFalha(name, err));
+    pendentes.push(cadeia);
+    return;
+  }
+
+  registarSucesso(name);
 }
 
 function assert(condition, message) {
@@ -2641,32 +2691,697 @@ describe('👁️ Visão: o diagnóstico avisa a tempo', () => {
 });
 
 
+
+// ═══════════════════════════════════════════════════════════
+// PRAZOS — nada pode ficar à espera para sempre
+// ═══════════════════════════════════════════════════════════
+
+describe('⏱️ Prazos: o silêncio tem limite', () => {
+  const prazo = require('../orchestrator/prazo');
+
+  test('um cronómetro corta a ligação quando o tempo acaba', async () => {
+    const c = prazo.relogio(30, 'O teste');
+    await new Promise(r => setTimeout(r, 80));
+    assert(c.expirou, 'devia ter expirado');
+    assert(c.signal.aborted, 'devia ter cortado');
+    assertIncludes(c.erro().message, 'não respondeu');
+  });
+
+  test('sinal de vida adia o prazo em vez de o deixar correr', async () => {
+    // É isto que distingue uma resposta longa de uma ligação muda: uma
+    // resposta que continua a chegar não pode ser cortada ao cronómetro.
+    const c = prazo.relogio(60, 'O teste');
+    for (let i = 0; i < 5; i++) {
+      await new Promise(r => setTimeout(r, 25));
+      c.adiar();
+    }
+    assert(!c.expirou, 'não devia expirar enquanto chega sinal');
+    c.parar();
+  });
+
+  test('parar impede o corte', async () => {
+    const c = prazo.relogio(30, 'O teste');
+    c.parar();
+    await new Promise(r => setTimeout(r, 80));
+    assert(!c.expirou);
+    assert(!c.signal.aborted);
+  });
+
+  test('o erro diz quanto se esperou, não "operation was aborted"', () => {
+    const c = prazo.relogio(5000, 'O DuckDuckGo');
+    c.parar();
+    assertIncludes(c.erro().message, 'DuckDuckGo');
+    assertIncludes(c.erro().message, '5s');
+  });
+
+  test('traduzirErro devolve o motivo real quando fomos nós a cortar', async () => {
+    const c = prazo.relogio(20, 'O Groq');
+    await new Promise(r => setTimeout(r, 60));
+    const bruto = new Error('This operation was aborted');
+    bruto.name = 'AbortError';
+    assertIncludes(prazo.traduzirErro(bruto, c, 'O Groq').message, 'não respondeu');
+  });
+
+  test('traduzirErro não mexe num erro que não é de prazo', () => {
+    const c = prazo.relogio(5000, 'O Groq');
+    c.parar();
+    const original = new Error('chave inválida');
+    assertEqual(prazo.traduzirErro(original, c, 'O Groq'), original);
+  });
+
+  test('comPrazo desiste de uma promessa que nunca acaba', async () => {
+    const nunca = new Promise(() => {});
+    let erro = null;
+    try {
+      await prazo.comPrazo(nunca, 40, 'O pedido');
+    } catch (e) {
+      erro = e;
+    }
+    assert(erro, 'devia ter desistido');
+    assertIncludes(erro.message, 'não terminou');
+  });
+
+  test('comPrazo deixa passar quem chega a tempo', async () => {
+    const r = await prazo.comPrazo(Promise.resolve('feito'), 500, 'O pedido');
+    assertEqual(r, 'feito');
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// A CADEIA: O GROQ À FRENTE, O LOCAL SÓ A PEDIDO
+// ═══════════════════════════════════════════════════════════
+
+describe('🏠 O modelo local é um pedido, não uma omissão', () => {
+  const llmRouter = require('../orchestrator/llmRouter');
+
+  const cadeia = [
+    { id: 'groq', name: 'Groq' },
+    { id: 'gemini', name: 'Gemini' },
+    { id: 'ollama', name: 'Ollama' }
+  ];
+  const perguntar = (t) => [{ role: 'user', content: t }];
+
+  test('sem pedido, o local sai da cadeia', () => {
+    // Media-se no registo: "Stream Ollama falhou: fetch failed" antes de cada
+    // resposta, porque ninguém tinha o Ollama a correr.
+    const r = llmRouter.escolherCadeia(cadeia, perguntar('olá, tudo bem?'));
+    assert(!r.some(p => p.id === 'ollama'), 'o Ollama não devia estar na cadeia');
+    assertEqual(r[0].id, 'groq', 'o Groq é o primeiro: grátis e rápido');
+  });
+
+  test('uma mensagem curta já não manda para o local', () => {
+    // O critério antigo era o tamanho do prompt. Já não é.
+    const r = llmRouter.escolherCadeia(cadeia, perguntar('oi'));
+    assertEqual(r[0].id, 'groq');
+  });
+
+  test('quem pede local, recebe só local', () => {
+    for (const frase of ['responde em modo local', 'usa o ollama', 'quero isto offline',
+                         'preciso de privacidade total', 'sem internet']) {
+      const r = llmRouter.escolherCadeia(cadeia, perguntar(frase));
+      assertEqual(r.length, 1, `"${frase}" devia dar só o local`);
+      assertEqual(r[0].id, 'ollama', `"${frase}" devia escolher o Ollama`);
+    }
+  });
+
+  test('pedir privacidade não pode acabar na nuvem', () => {
+    // Se o local falhar, o certo é explicar. Desviar para o Groq seria trair
+    // exactamente o que a pessoa pediu.
+    const r = llmRouter.escolherCadeia(cadeia, perguntar('em privado, sem sair da maquina'));
+    assert(!r.some(p => p.id === 'groq'), 'não pode haver saída para a nuvem');
+  });
+
+  test('quem chama pode decidir, sem depender das palavras', () => {
+    assert(llmRouter.querLocal(perguntar('qualquer coisa'), { local: true }));
+    assert(!llmRouter.querLocal(perguntar('usa o ollama'), { local: false }));
+  });
+
+  test('os acentos não enganam', () => {
+    assert(llmRouter.querLocal(perguntar('quero PRIVACIDADE TOTAL nisto')));
+    assert(llmRouter.querLocal(perguntar('só local, por favor')));
+  });
+
+  test('uma conversa normal não é um pedido de privacidade', () => {
+    assert(!llmRouter.querLocal(perguntar('explica-me o que é a privacidade de dados')),
+      'falar sobre privacidade não é pedir modo local');
+    assert(!llmRouter.querLocal(perguntar('escreve um email')));
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// O PEDIDO CHEGA AO AGENTE CERTO
+// ═══════════════════════════════════════════════════════════
+
+describe('🔧 Regras e ferramentas: quem decide o quê', () => {
+  const tools = require('../orchestrator/tools');
+
+  test('as intenções que o catálogo faz melhor cedem ao modelo', () => {
+    // Medido: "lista os ficheiros que tens na pasta do projeto" dava
+    // system_list_dir com "pasta" como nome da pasta, e a resposta era
+    // "Pasta não encontrada: user_data\\pasta".
+    for (const i of ['system_list_dir', 'web_search', 'list_files', 'system_read_file']) {
+      assert(tools.melhorComFerramentas(i), `${i} devia ir pelas ferramentas`);
+    }
+  });
+
+  test('os comandos exactos ficam com as regras', () => {
+    // Não têm ferramenta equivalente, e uma regra que casa é mais fiável.
+    for (const i of ['create_reminder', 'run_workflow', 'change_language', 'create_skill']) {
+      assert(!tools.melhorComFerramentas(i), `${i} devia ficar nas regras`);
+    }
+  });
+
+  test('conversa normal não é intenção nenhuma', () => {
+    assert(!tools.melhorComFerramentas('chat'));
+    assert(!tools.melhorComFerramentas(undefined));
+  });
+
+  test('cada ferramenta sabe dizer o que está a fazer', () => {
+    // Segundos de ecrã parado parecem avaria.
+    for (const f of tools.FERRAMENTAS) {
+      const frase = tools.emCurso(f.nome);
+      assert(frase && frase.length > 3, `${f.nome} sem frase de progresso`);
+      assert(!frase.includes(f.nome) || f.nome === 'recordar',
+        `${f.nome}: a frase devia ser para humanos, não o nome interno`);
+    }
+  });
+
+  test('uma ferramenta desconhecida não rebenta a frase', () => {
+    assertIncludes(tools.emCurso('inventada'), 'inventada');
+  });
+});
+
+
+describe('🔁 O ciclo de ferramentas também transmite', () => {
+  const toolLoop = require('../orchestrator/toolLoop');
+
+  test('existe uma versão que escreve à medida que pensa', () => {
+    // Sem isto, no workspace o NEXO era um chat sem ferramentas nenhumas.
+    assertEqual(typeof toolLoop.correrComStream, 'function');
+  });
+
+  test('o texto de sistema diz-lhe para ir buscar em vez de pedir', () => {
+    assertIncludes(toolLoop.SISTEMA, 'vai lá buscar');
+    assertIncludes(toolLoop.SISTEMA, 'Não peças ao utilizador');
+  });
+
+  test('sem ferramentas ligadas, cede o lugar em vez de falhar', async () => {
+    const antes = process.env.TOOLS_ENABLED;
+    process.env.TOOLS_ENABLED = '0';
+    try {
+      const semFerramentas = require('../orchestrator/toolLoop');
+      // ACTIVO é lido no carregamento; confirma-se apenas o contrato do null.
+      const r = await semFerramentas.correrComStream('olá', {}, {});
+      assert(r === null || typeof r === 'object');
+    } finally {
+      if (antes === undefined) delete process.env.TOOLS_ENABLED;
+      else process.env.TOOLS_ENABLED = antes;
+    }
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// A PESQUISA RECEBE TERMOS, NÃO UM DESABAFO
+// ═══════════════════════════════════════════════════════════
+
+describe('🔍 Pesquisa: a consulta é limpa antes de sair', () => {
+  const webSearchAgent = require('../agents/webSearchAgent');
+
+  test('uma frase curta passa tal como está', () => {
+    assertEqual(webSearchAgent.limparConsulta('preço do bitcoin hoje'), 'preço do bitcoin hoje');
+  });
+
+  test('um desabafo longo é cortado pela primeira frase', () => {
+    // Foi isto que ficou pendurado: a mensagem inteira foi parar a um endereço
+    // do DuckDuckGo e o pedido nunca voltou.
+    const longa = 'hummmm mas tu estas programado para aceder qualquer canto do meu pc. ' +
+      'e deverias ser capaz de analisar qualquer ficheiro ou pasta nele existente, '.repeat(6);
+    const r = webSearchAgent.limparConsulta(longa);
+    assert(r.length <= 200, `ficou com ${r.length} caracteres`);
+    assertIncludes(r, 'aceder qualquer canto');
+  });
+
+  test('sem pontuação, corta-se pelo tecto', () => {
+    const r = webSearchAgent.limparConsulta('palavra '.repeat(80));
+    assert(r.length <= 200);
+    assert(r.length > 0);
+  });
+
+  test('espaços a mais desaparecem', () => {
+    assertEqual(webSearchAgent.limparConsulta('  o  que   é   isto  '), 'o que é isto');
+  });
+
+  test('vazio é vazio, e não rebenta', () => {
+    assertEqual(webSearchAgent.limparConsulta(null), '');
+    assertEqual(webSearchAgent.limparConsulta(''), '');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// CHEGAR AOS FICHEIROS: LER, LISTAR E PROCURAR DENTRO
+// ═══════════════════════════════════════════════════════════
+
+describe('📂 Caminhos: ler e escrever não querem o mesmo sítio', () => {
+  const systemAgent = require('../agents/systemAgent');
+  const path = require('path');
+
+  test('um caminho relativo para leitura encontra a pasta do projecto', () => {
+    // Era aqui que falhava: "lê o package.json do projeto" ia procurar
+    // user_data/package.json e dizia "ficheiro não encontrado", com o
+    // ficheiro mesmo ali ao lado.
+    const p = systemAgent.expandPath('package.json', { paraLeitura: true });
+    assertEqual(p, path.resolve(process.cwd(), 'package.json'));
+  });
+
+  test('um caminho relativo para escrita continua a ir para user_data', () => {
+    // O que o NEXO cria fica arrumado num canto só.
+    const p = systemAgent.expandPath('nota_nova.txt');
+    assertIncludes(p, 'user_data');
+  });
+
+  test('"." é sempre a pasta do projecto', () => {
+    assertEqual(systemAgent.expandPath('.'), path.resolve(process.cwd()));
+    assertEqual(systemAgent.expandPath(''), path.resolve(process.cwd()));
+  });
+
+  test('um caminho absoluto passa intacto', () => {
+    const abs = path.resolve(process.cwd(), 'orchestrator');
+    assertEqual(systemAgent.expandPath(abs, { paraLeitura: true }), abs);
+  });
+
+  test('a barreira de caminhos não foi alargada', () => {
+    // Escolher melhor entre caminhos permitidos não é permitir mais nenhum.
+    assert(!systemAgent.isPathAllowed('C:\\Windows\\System32'));
+    assert(!systemAgent.isPathAllowed('/etc/passwd'));
+    assert(systemAgent.isPathAllowed(process.cwd()));
+  });
+});
+
+
+describe('🔎 Procurar dentro dos ficheiros', () => {
+  const systemAgent = require('../agents/systemAgent');
+
+  test('encontra uma palavra no código e diz onde', () => {
+    // Sem isto, o NEXO só podia pedir ao utilizador que lhe colasse o código
+    // que ele tinha ao lado.
+    const r = systemAgent.procurarEmFicheiros('correrComStream', '.');
+    assert(r.success, r.error);
+    assert(r.resultados.length > 0, 'devia ter encontrado');
+    assert(r.resultados.some(x => x.ficheiro.includes('toolLoop')),
+      'a função vive no toolLoop: ' + JSON.stringify(r.resultados.slice(0, 3)));
+  });
+
+  test('cada achado traz ficheiro, linha e o que lá está', () => {
+    const r = systemAgent.procurarEmFicheiros('module.exports', 'orchestrator');
+    assert(r.success);
+    const primeiro = r.resultados[0];
+    assert(primeiro.ficheiro, 'sem ficheiro');
+    assert(primeiro.linha > 0, 'sem número de linha');
+    assertIncludes(primeiro.texto, 'module.exports');
+  });
+
+  test('não distingue maiúsculas de minúsculas', () => {
+    const r = systemAgent.procurarEmFicheiros('MODULE.EXPORTS', 'orchestrator');
+    assert(r.success && r.resultados.length > 0);
+  });
+
+  test('não procura em node_modules', () => {
+    // Varrer dezenas de milhares de ficheiros de terceiros para responder a
+    // uma pergunta sobre o projecto seria uma espera inútil.
+    const r = systemAgent.procurarEmFicheiros('correrComStream', '.');
+    assert(!r.resultados.some(x => x.ficheiro.includes('node_modules')));
+  });
+
+  test('não aceita um termo demasiado curto', () => {
+    const r = systemAgent.procurarEmFicheiros('a', '.');
+    assertEqual(r.success, false);
+    assertIncludes(r.error, 'duas letras');
+  });
+
+  test('uma palavra que não existe dá resposta clara, não um erro', () => {
+    const r = systemAgent.procurarEmFicheiros('zzxqwvbnmpalavraimpossivel', 'orchestrator');
+    assert(r.success, 'não encontrar não é falhar');
+    assertEqual(r.resultados.length, 0);
+    assertIncludes(r.message, 'Não encontrei');
+  });
+
+  test('uma pasta fora dos limites é recusada', () => {
+    const r = systemAgent.procurarEmFicheiros('password', 'C:\\Windows\\System32');
+    assertEqual(r.success, false);
+    assertIncludes(r.error, 'não permitido');
+  });
+
+  test('há tecto de resultados para não despejar o projecto inteiro', () => {
+    const r = systemAgent.procurarEmFicheiros('const', '.');
+    assert(r.success);
+    assert(r.resultados.length <= 40, `veio ${r.resultados.length}`);
+  });
+});
+
+
+describe('🧰 O catálogo aponta para onde o utilizador vive', () => {
+  const tools = require('../orchestrator/tools');
+
+  test('as ferramentas de ficheiros estão sempre à mão', () => {
+    // Um pedido em linguagem normal muitas vezes não tem palavra nenhuma do
+    // pré-filtro. Sem isto, o NEXO ficava sem maneira de chegar aos ficheiros
+    // e respondia que não podia ver nada.
+    const semPalavras = tools.seleccionar('podes dar uma vista de olhos nisto por favor');
+    const nomes = semPalavras.map(f => f.nome);
+    assertIncludes(nomes.join(','), 'ler_ficheiro');
+    assertIncludes(nomes.join(','), 'procurar_em_ficheiros');
+  });
+
+  test('uma palavra que acerta não deixa as básicas em casa', () => {
+    // Medido: "lê o package.json do projeto e diz-me a versão" pontuava em
+    // "projeto", levava listar_ficheiros e deixava ler_ficheiro de fora. O
+    // NEXO listou a pasta e respondeu "sem uma ferramenta para ler o
+    // ficheiro, não posso" — com a ferramenta a existir, a um passo.
+    const nomes = tools.seleccionar('le o package.json do projeto e diz-me so a versao')
+      .map(f => f.nome);
+    assertIncludes(nomes.join(','), 'ler_ficheiro');
+    assert(nomes.indexOf('listar_ficheiros') === 0,
+      'o que pontuou continua à frente: ' + nomes.join(','));
+  });
+
+  test('o que pontua mais alto vai sempre à frente', () => {
+    const nomes = tools.seleccionar('procura no codigo onde aparece isto').map(f => f.nome);
+    assert(nomes.includes('procurar_em_ficheiros'), nomes.join(','));
+  });
+
+  test('nunca se envia o catálogo inteiro', () => {
+    // Cada descrição ocupa espaço no prompt em todos os pedidos.
+    const n = tools.seleccionar('le o ficheiro da pasta do projeto e pesquisa na web as horas').length;
+    assert(n <= tools.MAX_FERRAMENTAS, `foram ${n}`);
+  });
+
+  test('procurar no código é uma ferramenta que existe', () => {
+    assert(tools.porNome('procurar_em_ficheiros'), 'faltava esta e era a que resolvia tudo');
+  });
+
+  test('já não há duas ferramentas a listar pastas', () => {
+    // listar_ficheiros e listar_pasta faziam o mesmo com alcances diferentes,
+    // e o modelo escolhia a errada.
+    assert(!tools.porNome('listar_pasta'), 'a duplicada devia ter saído');
+    assert(tools.porNome('listar_ficheiros'));
+  });
+
+  test('listar ficheiros alcança a pasta do projecto', async () => {
+    const r = await tools.executar('listar_ficheiros', { pasta: '.' }, { userId: 'teste' });
+    assertIncludes(r, 'package.json');
+  });
+
+  test('ler um ficheiro do projecto funciona sem caminho absoluto', async () => {
+    const r = await tools.executar('ler_ficheiro', { caminho: 'package.json' }, { userId: 'teste' });
+    assertIncludes(r, 'nexo-assistant');
+  });
+
+  test('uma pasta proibida continua proibida através da ferramenta', async () => {
+    const r = await tools.executar('listar_ficheiros', { pasta: 'C:\\Windows\\System32' }, { userId: 'teste' });
+    assertIncludes(r, 'não permitido');
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// POWERSHELL: O SCRIPT TEM DE CHEGAR INTEIRO
+// ═══════════════════════════════════════════════════════════
+
+describe('🪟 PowerShell sem perder o script pelo caminho', () => {
+  const powershell = require('../agents/powershell');
+
+  test('o script viaja codificado, com as linhas intactas', () => {
+    // Com tudo numa linha, os tipos do Add-Type ainda não existem quando são
+    // usados: "Unable to find type [System.Drawing.Point]".
+    const codificado = powershell.codificar('Write-Output 1\nWrite-Output 2');
+    const voltou = Buffer.from(codificado, 'base64').toString('utf16le');
+    assertIncludes(voltou, '\n');
+    assertIncludes(voltou, 'Write-Output 1');
+  });
+
+  test('um caminho com plica não parte a string', () => {
+    // Estava partido desde Fevereiro por causa das aspas.
+    assertEqual(powershell.comPlicas("C:\\pasta d'antes\\f.png"), "'C:\\pasta d''antes\\f.png'");
+  });
+
+  test('um caminho normal fica entre plicas', () => {
+    assertEqual(powershell.comPlicas('C:\\temp\\a.png'), "'C:\\temp\\a.png'");
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// O AVISO QUE APARECE SEMPRE DEIXA DE SER LIDO
+// ═══════════════════════════════════════════════════════════
+
+describe('🩺 Sentinela: o opcional ausente não é avaria', () => {
+  const providerHealth = require('../orchestrator/providerHealth');
+
+  const ollamaEmBaixo = { id: 'ollama', name: 'Ollama', status: providerHealth.STATUS.UNREACHABLE, error: 'fetch failed' };
+  const groqPodre = { id: 'groq', name: 'Groq', status: providerHealth.STATUS.STALE, missing: ['x'], available: 3, sample: [] };
+
+  test('o Ollama desligado não conta como problema', () => {
+    // Quem não quer o modelo local não tem de ver vermelho em cada arranque.
+    assertEqual(providerHealth.problems([ollamaEmBaixo]).length, 0);
+  });
+
+  test('mas um modelo que já não existe continua a contar', () => {
+    assertEqual(providerHealth.problems([groqPodre]).length, 1);
+  });
+
+  test('com OLLAMA_SEMPRE=1, o local passa a ser obrigatório', () => {
+    const antes = process.env.OLLAMA_SEMPRE;
+    process.env.OLLAMA_SEMPRE = '1';
+    try {
+      assertEqual(providerHealth.problems([ollamaEmBaixo]).length, 1);
+    } finally {
+      if (antes === undefined) delete process.env.OLLAMA_SEMPRE;
+      else process.env.OLLAMA_SEMPRE = antes;
+    }
+  });
+
+  test('o relatório explica em vez de alarmar', () => {
+    assertIncludes(providerHealth.formatReport([ollamaEmBaixo]), 'opcional');
+  });
+});
+
+
+describe('🔌 Os motores da cadeia apontam para modelos que existem', () => {
+  const llmRouter = require('../orchestrator/llmRouter');
+
+  test('o Cerebras já não aponta para os llama retirados', () => {
+    // A sentinela avisou durante semanas e ninguém agiu: o segundo motor da
+    // cadeia estava morto e uma falha do Groq não tinha para onde ir.
+    const c = llmRouter.PROVIDERS.cerebras;
+    assert(!/llama-3/.test(c.model), `ainda em ${c.model}`);
+    assert(!/llama-3/.test(c.fallbackModel), `reserva ainda em ${c.fallbackModel}`);
+  });
+
+  test('todo o fornecedor com reserva tem uma reserva diferente do principal', () => {
+    // Uma reserva igual ao principal não é reserva nenhuma.
+    for (const [id, p] of Object.entries(llmRouter.PROVIDERS)) {
+      if (!p.fallbackModel) continue;
+      assert(p.fallbackModel !== p.model, `${id}: a reserva é o próprio modelo`);
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// O TRABALHO JÁ FEITO NÃO SE DEITA FORA
+// ═══════════════════════════════════════════════════════════
+
+describe('🛟 Motores em baixo a meio do ciclo de ferramentas', () => {
+  const toolLoop = require('../orchestrator/toolLoop');
+  const llmRouter = require('../orchestrator/llmRouter');
+
+  /** Substitui o chatStream por um guião, e devolve-o ao fim. */
+  async function comGuiao(passos, tarefa) {
+    const original = llmRouter.chatStream;
+    let n = 0;
+    llmRouter.chatStream = async (mensagens, onToken, onDone) => {
+      const passo = passos[Math.min(n, passos.length - 1)];
+      n++;
+      if (passo.erro) throw new Error(passo.erro);
+      if (passo.texto) onToken(passo.texto);
+      onDone(passo.texto || '', {
+        provider: 'Falso',
+        toolCalls: passo.toolCalls || null,
+        raw: passo.toolCalls ? { role: 'assistant', content: null, tool_calls: passo.toolCalls } : undefined
+      });
+    };
+    try {
+      return await tarefa(() => n);
+    } finally {
+      llmRouter.chatStream = original;
+    }
+  }
+
+  const pedeListagem = [{
+    toolCalls: [{
+      id: 'c1', type: 'function',
+      function: { name: 'listar_ficheiros', arguments: JSON.stringify({ pasta: '.' }) }
+    }]
+  }];
+
+  test('os motores caem depois de as ferramentas trabalharem: a resposta ainda sai', async () => {
+    // Medido: o Groq bate no limite por minuto e o Cerebras fica sem quota a
+    // meio do ciclo. Antes, tudo o que as ferramentas tinham ido buscar era
+    // deitado fora e a resposta era "todos os providers falharam".
+    let escrito = '';
+    const r = await comGuiao(
+      [...pedeListagem, { erro: 'Todos os providers de IA falharam' }],
+      () => toolLoop.correrComStream(
+        'lista os ficheiros do projeto',
+        { userId: 'teste' },
+        { onToken: (t) => { escrito += t; } }
+      )
+    );
+
+    assert(r, 'devia ter devolvido alguma coisa em vez de null');
+    assertIncludes(r.texto, 'package.json');
+    assertIncludes(escrito, 'package.json');
+    assert(r.ferramentasUsadas.includes('listar_ficheiros'));
+  });
+
+  test('quem espera é avisado de cada ferramenta que corre', async () => {
+    const avisos = [];
+    await comGuiao(
+      [...pedeListagem, { texto: 'Tens 50 itens na pasta.' }],
+      () => toolLoop.correrComStream(
+        'lista os ficheiros do projeto',
+        { userId: 'teste' },
+        { onToken: () => {}, onProgresso: (p) => avisos.push(p) }
+      )
+    );
+    assertEqual(avisos.length, 1);
+    assertEqual(avisos[0].ferramenta, 'listar_ficheiros');
+    assertIncludes(avisos[0].texto, 'ficheiros');
+  });
+
+  test('sem ferramenta pedida, o texto já foi para o ecrã e é esse que conta', async () => {
+    let escrito = '';
+    const r = await comGuiao(
+      [{ texto: 'Olá, tudo bem?' }],
+      () => toolLoop.correrComStream('ola', { userId: 'teste' }, { onToken: (t) => { escrito += t; } })
+    );
+    assertEqual(r.texto, 'Olá, tudo bem?');
+    assertEqual(escrito, 'Olá, tudo bem?');
+    assertEqual(r.ferramentasUsadas.length, 0);
+  });
+
+  test('falha antes de qualquer trabalho cede o lugar em vez de inventar', async () => {
+    // Nada apurado e nada escrito: devolve null para o chamador seguir para
+    // conversa simples, em vez de mostrar um erro que não explica nada.
+    const r = await comGuiao(
+      [{ erro: 'sem rede' }],
+      () => toolLoop.correrComStream('ola', { userId: 'teste' }, { onToken: () => {} })
+    );
+    assertEqual(r, null);
+  });
+
+  test('nenhum fornecedor sabe usar ferramentas: cede o lugar', async () => {
+    const original = llmRouter.chatStream;
+    llmRouter.chatStream = async (m, onToken, onDone) => onDone('', { noToolProvider: true });
+    try {
+      const r = await toolLoop.correrComStream('lista os ficheiros', { userId: 'teste' }, { onToken: () => {} });
+      assertEqual(r, null);
+    } finally {
+      llmRouter.chatStream = original;
+    }
+  });
+
+  test('os dados em cru dizem que são dados em cru', async () => {
+    const cru = toolLoop.emCru([
+      { role: 'user', content: 'x' },
+      { role: 'tool', name: 'listar_ficheiros', content: 'package.json' }
+    ]);
+    assertIncludes(cru, 'package.json');
+    assertIncludes(cru, 'Não consegui redigir');
+  });
+
+  test('sem nada apurado não há cru para mostrar', () => {
+    assertEqual(toolLoop.emCru([{ role: 'user', content: 'x' }]), null);
+  });
+});
+
+
+describe('🚫 Uma falha não se entrega como se fosse resposta', () => {
+  const llmRouter = require('../orchestrator/llmRouter');
+
+  test('o texto "todos os providers falharam" não pode chegar como resposta', async () => {
+    // Era escrito no ecrã token a token, com o aspecto de uma resposta normal.
+    // Quem chamava não tinha como saber que era um erro, e o ciclo de
+    // ferramentas deitava fora o trabalho já feito por pensar que estava dado.
+    const antes = process.env.LLM_PROVIDER_ORDER;
+    process.env.LLM_PROVIDER_ORDER = 'huggingface'; // sem chave, não transmite
+
+    let recebido = '';
+    let erro = null;
+    try {
+      await llmRouter.chatStream(
+        [{ role: 'user', content: 'olá' }],
+        (t) => { recebido += t; },
+        () => {},
+        { maxTokens: 16 }
+      );
+    } catch (e) {
+      erro = e;
+    } finally {
+      if (antes === undefined) delete process.env.LLM_PROVIDER_ORDER;
+      else process.env.LLM_PROVIDER_ORDER = antes;
+    }
+
+    assert(erro, 'devia ter lançado em vez de entregar o erro como texto');
+    assert(!/^⚠️ Todos os providers/.test(recebido),
+      'o erro não pode ser escrito no ecrã como resposta: ' + recebido.slice(0, 80));
+  });
+});
 // ═══════════════════════════════════════════════════════════
 // RESULTADO FINAL
 // ═══════════════════════════════════════════════════════════
 
-console.log('\n' + '═'.repeat(55));
-console.log(`\n🧪 RESULTADO: ${passed}/${totalTests} testes passaram`);
+// O resultado só se conta depois de os testes assíncronos acabarem. Contá-lo
+// antes era o mesmo que não os ter.
+Promise.all(pendentes).then(() => {
+  console.log('\n' + '═'.repeat(55));
+  console.log(`\n🧪 RESULTADO: ${passed}/${totalTests} testes passaram`);
 
-if (failed > 0) {
-  console.log(`❌ ${failed} falha(s):\n`);
-  failures.forEach((f, i) => {
-    console.log(`   ${i + 1}. ${f.name}`);
-    console.log(`      → ${f.error}\n`);
-  });
-  process.exitCode = 1;
-} else {
-  console.log('✅ Todos os testes passaram!\n');
-}
+  if (failed > 0) {
+    console.log(`❌ ${failed} falha(s):\n`);
+    failures.forEach((f, i) => {
+      console.log(`   ${i + 1}. ${f.name}`);
+      console.log(`      → ${f.error}\n`);
+    });
+    process.exitCode = 1;
+  } else {
+    console.log('✅ Todos os testes passaram!\n');
+  }
 
-console.log('═'.repeat(55) + '\n');
+  console.log('═'.repeat(55) + '\n');
 
-// A suite carrega agentes que deixam temporizadores a correr — o agendador, o
-// monitor de alertas, o histórico da área de transferência. O Node só fecha
-// quando não sobra nada por fazer, e isso nunca acontece: o `npm test` ficava
-// pendurado depois de já ter dito o resultado. Num runner de CI seria um
-// timeout eterno em vez de um teste verde.
-//
-// A saída vai dentro do callback do write para o resultado chegar inteiro ao
-// ecrã (ou ao ficheiro de log) antes de o processo desaparecer.
-process.stdout.write('', () => process.exit(failed > 0 ? 1 : 0));
+  // A suite carrega agentes que deixam temporizadores a correr — o agendador, o
+  // monitor de alertas, o histórico da área de transferência. O Node só fecha
+  // quando não sobra nada por fazer, e isso nunca acontece: o `npm test` ficava
+  // pendurado depois de já ter dito o resultado. Num runner de CI seria um
+  // timeout eterno em vez de um teste verde.
+  //
+  // Sair à bruta também não serve. Com testes assíncronos a fazer pedidos
+  // reais, o process.exit apanhava ligações a meio do fecho e o Node rebentava
+  // com "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)" e código 127.
+  // Verde no ecrã, vermelho para quem lê o código de saída.
+  //
+  // Fecha-se primeiro o que é nosso, dá-se um instante ao resto, e só depois
+  // se sai. A saída vai dentro do callback do write para o resultado chegar
+  // inteiro ao ecrã (ou ao ficheiro de log) antes de o processo desaparecer.
+  const codigo = failed > 0 ? 1 : 0;
+  process.exitCode = codigo;
+
+  Promise.resolve()
+    .then(() => require('../orchestrator/llmRouter').shutdown())
+    .catch(() => {})
+    .then(() => new Promise(r => setTimeout(r, 150)))
+    .then(() => process.stdout.write('', () => process.exit(codigo)));
+});

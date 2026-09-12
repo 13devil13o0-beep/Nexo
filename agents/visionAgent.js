@@ -19,6 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync, exec } = require('child_process');
 const https = require('https');
+const powershell = require('./powershell');
 
 // ═══════════════════════════════════════════════════════════
 //  CONSTANTES
@@ -67,6 +68,10 @@ function captureScreen() {
 }
 
 function captureWindows(filepath) {
+  // As quebras de linha têm de sobreviver. Com o script todo numa linha, os
+  // tipos do Add-Type ainda não existem quando são usados e o PowerShell
+  // responde "Unable to find type [System.Drawing.Point]". Ver
+  // agents/powershell.js para a explicação inteira.
   const script = `
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -74,16 +79,13 @@ $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-$bitmap.Save('${filepath.replace(/\\/g, '\\\\')}', [System.Drawing.Imaging.ImageFormat]::Png)
+$bitmap.Save(${powershell.comPlicas(filepath)}, [System.Drawing.Imaging.ImageFormat]::Png)
 $graphics.Dispose()
 $bitmap.Dispose()
 `;
 
   try {
-    execSync(`powershell -NoProfile -Command "${script.replace(/\n/g, ' ')}"`, {
-      timeout: 10000,
-      windowsHide: true
-    });
+    powershell.correrSync(script, { timeout: 15000 });
 
     if (fs.existsSync(filepath)) {
       return { success: true, path: filepath, size: fs.statSync(filepath).size };

@@ -23,6 +23,9 @@ const codeRunner = require('../agents/codeRunner');
 const dispositivo = require('./dispositivo');
 const definicoes = require('./definicoes');
 const { abrirBrowser } = require('./browser');
+const toolLoop = require('./toolLoop');
+const tools = require('./tools');
+const prazo = require('./prazo');
 
 // Deploy helper (wizard AWS)
 let deployHelper;
@@ -209,6 +212,47 @@ async function responderSobreImagem(mensagem, ficheiro) {
 _(visão por ${r.fornecedor})_` : r.analysis;
 }
 
+// ═══════════════════════════════════════════════════════════
+// MEMÓRIA DA CONVERSA NO CAMINHO COM STREAMING
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * O caminho com streaming lia o histórico e nunca escrevia nele.
+ *
+ * Nem a pergunta nem a resposta ficavam guardadas. Cada mensagem começava do
+ * zero, e o NEXO perdia o fio de propósito: podia dizer o que dissesse, no
+ * turno seguinte já não se lembrava. Quem estava do outro lado só via um
+ * assistente distraído.
+ *
+ * @returns {{ id: string|null, historico: Array }}
+ */
+function guardarPergunta(clientId, mensagem) {
+  try {
+    const { conversationStore } = require('../memory/conversationStore');
+    const conversa = conversationStore.getOrCreateConversation(clientId);
+
+    // O histórico é lido ANTES de a nova pergunta entrar, senão o modelo
+    // recebe-a duas vezes: uma no histórico e outra como pergunta.
+    const historico = conversationStore.getHistoryForContext(conversa.id, 10);
+    conversationStore.addMessage(conversa.id, { role: 'user', content: mensagem });
+
+    return { id: conversa.id, historico };
+  } catch (e) {
+    console.warn(`[WS] Não consegui guardar a pergunta: ${e.message}`);
+    return { id: null, historico: [] };
+  }
+}
+
+function guardarResposta(conversaId, texto) {
+  if (!conversaId || !texto) return;
+  try {
+    const { conversationStore } = require('../memory/conversationStore');
+    conversationStore.addMessage(conversaId, { role: 'assistant', content: texto });
+  } catch (e) {
+    console.warn(`[WS] Não consegui guardar a resposta: ${e.message}`);
+  }
+}
+
 app.get('/api/status', (req, res) => {
   res.json({
     online: true,
@@ -261,13 +305,23 @@ app.post('/api/chat', async (req, res) => {
       timestamp: Date.now()
     };
     
-    // Processar com orchestrator
-    const result = await router.handlePrompt(message, enhancedContext);
-    
+    // Processar com orchestrator, com prazo. É este o caminho que a janela
+    // usa quando o WebSocket não está de pé, e sem prazo ficava à espera para
+    // sempre tal como o outro.
+    const result = await prazo.comPrazo(
+      router.handlePrompt(message, enhancedContext),
+      prazo.PRAZO_PEDIDO_MS,
+      'O pedido'
+    );
+
     // Extrair resposta (pode ser string ou objeto com metadata)
-    const response = typeof result === 'object' ? (result.text || result.response || JSON.stringify(result)) : result;
-    const metadata = typeof result === 'object' ? result : {};
-    
+    const metadata = typeof result === 'object' && result !== null ? result : {};
+    const bruta = typeof result === 'object' && result !== null
+      ? (result.text || result.response || '')
+      : result;
+    const response = String(bruta || '').trim() ||
+      '⚠️ Não consegui responder a isso. Tenta dizer de outra maneira.';
+
     res.json({
       success: true,
       response,
@@ -301,16 +355,17 @@ app.post('/api/chat/stream', security.authMiddleware, async (req, res) => {
     const intentParser = require('./intentParser');
     const intentData = intentParser.parseIntent(message);
     
-    // Se é um intent específico (não 'chat'), usar o router normal
-    if (intentData.intent !== 'chat') {
+    // Se é um intent específico, usar o router normal — menos as intenções
+    // que o catálogo de ferramentas faz melhor. Mesma regra do WebSocket.
+    if (intentData.intent !== 'chat' && !tools.melhorComFerramentas(intentData.intent)) {
       console.log(`🎯 Intent detectado em SSE: ${intentData.intent}`);
       const userId = security.getUserId({ ...context, source: 'api' });
-      const result = await router.handlePrompt(message, { 
-        userId, 
-        source: 'api-stream',
-        conversationId 
-      });
-      
+      const result = await prazo.comPrazo(
+        router.handlePrompt(message, { userId, source: 'api-stream', conversationId }),
+        prazo.PRAZO_PEDIDO_MS,
+        'O pedido'
+      );
+
       // Devolver como JSON normal (não SSE)
       return res.json(result);
     }
@@ -324,15 +379,11 @@ app.post('/api/chat/stream', security.authMiddleware, async (req, res) => {
       'X-Accel-Buffering': 'no'
     });
 
-    // Obter histórico de conversação
-    let history = [];
-    try {
-      const { conversationStore } = require('../memory/conversationStore');
-      const conversation = conversationStore.getOrCreateConversation(
-        security.getUserId({ ...context, source: 'api' })
-      );
-      history = conversationStore.getHistoryForContext(conversation.id, 10);
-    } catch {}
+    // Mesmo cérebro do WebSocket: ferramentas primeiro, e a conversa fica
+    // guardada. Sem isto, quem chamasse o NEXO pela API tinha um chat sem
+    // mãos e sem memória, ao contrário de quem o usasse pela janela.
+    const userId = security.getUserId({ ...context, source: 'api' });
+    const conversa = guardarPergunta(userId, message);
 
     // Enriquecer mensagem com contexto RAG
     let enrichedMessage = message;
@@ -346,26 +397,54 @@ app.post('/api/chat/stream', security.authMiddleware, async (req, res) => {
       }
     } catch {}
 
-    // Stream tokens via SSE
+    const enviaToken = (token) => {
+      res.write(`data: ${JSON.stringify({ type: 'token', token })}\n\n`);
+    };
+    const enviaProgresso = (p) => {
+      res.write(`data: ${JSON.stringify({ type: 'status', ...p })}\n\n`);
+    };
+
     let fullResponse = '';
-    
-    await aiAgent.askAIStream(
-      enrichedMessage,
-      history,
-      (token) => {
-        fullResponse += token;
-        res.write(`data: ${JSON.stringify({ type: 'token', token })}\n\n`);
-      },
-      { maxTokens: 2048, temperature: 0.7 }
+    let ferramentas = [];
+
+    const comFerramentas = await prazo.comPrazo(
+      toolLoop.correrComStream(
+        message,
+        { userId, historico: conversa.historico },
+        { onToken: enviaToken, onProgresso: enviaProgresso }
+      ),
+      prazo.PRAZO_PEDIDO_MS,
+      'O pedido'
     );
 
+    if (comFerramentas && comFerramentas.texto) {
+      fullResponse = comFerramentas.texto;
+      ferramentas = comFerramentas.ferramentasUsadas || [];
+    } else {
+      fullResponse = await prazo.comPrazo(
+        aiAgent.askAIStream(enrichedMessage, conversa.historico, enviaToken, {
+          maxTokens: 2048, temperature: 0.7, userId
+        }),
+        prazo.PRAZO_PEDIDO_MS,
+        'O pedido'
+      );
+    }
+
+    if (!fullResponse || !String(fullResponse).trim()) {
+      fullResponse = '⚠️ Não consegui responder a isso. Tenta dizer de outra maneira.';
+      enviaToken(fullResponse);
+    }
+
+    guardarResposta(conversa.id, fullResponse);
+
     // Enviar evento final com metadata
-    res.write(`data: ${JSON.stringify({ 
-      type: 'done', 
+    res.write(`data: ${JSON.stringify({
+      type: 'done',
       response: fullResponse,
+      ferramentas,
       conversationId
     })}\n\n`);
-    
+
     res.end();
 
   } catch (error) {
@@ -836,8 +915,13 @@ async function handleWSMessage(clientId, message) {
         const intentParser = require('./intentParser');
         const intentData = intentParser.parseIntent(data.message);
         
-        // Se é um intent específico (não 'chat'), usar o router normal
-        if (intentData.intent !== 'chat') {
+        // Se é um intent específico (não 'chat'), usar o router normal.
+        //
+        // Menos as intenções que o catálogo de ferramentas faz melhor. A regra
+        // acerta na intenção e erra nos argumentos: "lista os ficheiros da
+        // pasta do projeto" virava uma busca pela pasta chamada "pasta". O
+        // modelo lê a frase toda antes de decidir.
+        if (intentData.intent !== 'chat' && !tools.melhorComFerramentas(intentData.intent)) {
           console.log(`🎯 Intent detectado em stream: ${intentData.intent}`);
           const context = { 
             userId: clientId, 
@@ -845,59 +929,113 @@ async function handleWSMessage(clientId, message) {
             conversationId: data.conversationId
           };
           
-          const result = await router.handlePrompt(data.message, context);
-          
+          // Com prazo: foi por aqui que o NEXO ficou mudo. A frase acabava em
+          // "pesquisar na web", o parser mandou-a para a pesquisa, o pedido
+          // ficou pendurado e nunca voltou resposta nenhuma.
+          const result = await prazo.comPrazo(
+            router.handlePrompt(data.message, context),
+            prazo.PRAZO_PEDIDO_MS,
+            'O pedido'
+          );
+
+          // Uma resposta vazia chega ao ecrã como um balão mudo, e quem está
+          // do outro lado não sabe se falhou ou se ainda vem alguma coisa.
+          const texto = (result?.text || '').trim() ||
+            '⚠️ Não consegui responder a isso. Tenta dizer de outra maneira.';
+
           // Enviar resposta completa (não streaming)
           if (client.ws.readyState === WebSocket.OPEN) {
             client.ws.send(JSON.stringify({
               type: 'chat_response',
               requestId,
               data: {
-                response: result.text,
-                speakableText: result.speakableText || result.text
+                response: texto,
+                speakableText: result?.speakableText || texto
               }
             }));
           }
           break;
         }
         
-        // É chat normal - usar streaming
-        let history = [];
-        try {
-          const { conversationStore } = require('../memory/conversationStore');
-          const conv = conversationStore.getOrCreateConversation(clientId);
-          history = conversationStore.getHistoryForContext(conv.id, 10);
-        } catch {}
-        
-        await aiAgent.askAIStream(
-          data.message,
-          history,
-          (token) => {
-            if (client.ws.readyState === WebSocket.OPEN) {
-              client.ws.send(JSON.stringify({
-                type: 'stream_token',
-                requestId,
-                data: { token }
-              }));
-            }
-          },
-          { maxTokens: 2048, temperature: 0.7 }
+        // ── Conversa normal ──────────────────────────────────
+        //
+        // Aqui é que o NEXO deixava de ser assistente. Uma mensagem normal ia
+        // directa ao modelo, sem ferramentas nenhumas, porque o ciclo delas só
+        // era chamado pelo caminho sem streaming. Dava um chat que prometia ler
+        // ficheiros e depois pedia ao utilizador que lhos colasse.
+        //
+        // Agora o mesmo cérebro serve os dois caminhos.
+        const conversa = guardarPergunta(clientId, data.message);
+        const history = conversa.historico;
+
+        const enviaToken = (token) => {
+          if (client.ws.readyState === WebSocket.OPEN) {
+            client.ws.send(JSON.stringify({ type: 'stream_token', requestId, data: { token } }));
+          }
+        };
+        const enviaProgresso = (p) => {
+          if (client.ws.readyState === WebSocket.OPEN) {
+            client.ws.send(JSON.stringify({ type: 'stream_status', requestId, data: p }));
+          }
+        };
+
+        let resposta = '';
+        let ferramentas = [];
+
+        const comFerramentas = await prazo.comPrazo(
+          toolLoop.correrComStream(
+            data.message,
+            { userId: clientId, historico: history },
+            { onToken: enviaToken, onProgresso: enviaProgresso }
+          ),
+          prazo.PRAZO_PEDIDO_MS,
+          'O pedido'
         );
-        
-        // Signal stream done
+
+        if (comFerramentas && comFerramentas.texto) {
+          resposta = comFerramentas.texto;
+          ferramentas = comFerramentas.ferramentasUsadas || [];
+          if (ferramentas.length) {
+            security.logAction(clientId, 'tools-used', {
+              ferramentas, passos: comFerramentas.passos, via: 'stream'
+            });
+          }
+        } else {
+          // O nível das ferramentas não se aplicou. Conversa simples.
+          resposta = await prazo.comPrazo(
+            aiAgent.askAIStream(data.message, history, enviaToken, {
+              maxTokens: 2048, temperature: 0.7, userId: clientId
+            }),
+            prazo.PRAZO_PEDIDO_MS,
+            'O pedido'
+          );
+        }
+
+        // Uma resposta vazia é a pior de todas: no ecrã fica um balão com um
+        // cursor a piscar e ninguém sabe se ainda vem alguma coisa.
+        if (!resposta || !String(resposta).trim()) {
+          resposta = '⚠️ Não consegui responder a isso. Tenta outra vez, ou diz-me de outra maneira.';
+          enviaToken(resposta);
+        }
+
+        guardarResposta(conversa.id, resposta);
+
         if (client.ws.readyState === WebSocket.OPEN) {
           client.ws.send(JSON.stringify({
             type: 'stream_done',
             requestId,
-            data: { conversationId: data.conversationId }
+            data: { conversationId: data.conversationId, ferramentas }
           }));
         }
       } catch (error) {
-        client.ws.send(JSON.stringify({
-          type: 'error',
-          requestId,
-          data: { message: error.message }
-        }));
+        console.error('[WS] Erro no stream:', error.message);
+        if (client.ws.readyState === WebSocket.OPEN) {
+          client.ws.send(JSON.stringify({
+            type: 'error',
+            requestId,
+            data: { message: error.message }
+          }));
+        }
       }
       break;
       

@@ -146,29 +146,51 @@ function isCommandAllowed(command) {
 
 /**
  * Expande path relativo ou com ~
+ *
+ * Ler e escrever não querem o mesmo sítio por omissão.
+ *
+ * Escrever num caminho relativo vai para user_data, e isso está certo: o que
+ * o NEXO cria fica arrumado num canto só. Mas ler seguia a mesma regra, e
+ * "lê o package.json do projeto" ia procurar user_data/package.json e
+ * respondia "ficheiro não encontrado" com o ficheiro mesmo ali ao lado.
+ *
+ * Para leitura, procura-se onde a pessoa quis dizer: primeiro na pasta do
+ * projecto, depois em user_data. Quem decide o que é permitido continua a ser
+ * isPathAllowed: isto só escolhe entre caminhos que já estavam autorizados.
  */
-function expandPath(inputPath) {
-  let expanded = inputPath;
-  
+function expandPath(inputPath, opcoes = {}) {
+  let expanded = String(inputPath ?? '');
+
   // Expandir ~
   if (expanded.startsWith('~')) {
     expanded = expanded.replace('~', HOME);
   }
-  
+
   // Se for apenas "." ou vazio, usar o directório do projecto
   if (expanded === '.' || expanded === '') {
-    expanded = process.cwd();
+    return path.resolve(process.cwd());
   }
-  // Se relativo, usar pasta user_data do NEXO
-  else if (!path.isAbsolute(expanded)) {
-    // Criar user_data se não existir
+
+  if (!path.isAbsolute(expanded)) {
+    const noProjecto = path.resolve(process.cwd(), expanded);
     const userDataDir = path.join(process.cwd(), 'user_data');
+    const emUserData = path.resolve(userDataDir, expanded);
+
+    if (opcoes.paraLeitura) {
+      if (fs.existsSync(noProjecto)) return noProjecto;
+      if (fs.existsSync(emUserData)) return emUserData;
+      // Nenhum existe: devolve-se o do projecto, que é o que se quis dizer,
+      // para a mensagem de erro apontar ao sítio certo.
+      return noProjecto;
+    }
+
+    // Escrita: criar user_data se não existir.
     if (!fs.existsSync(userDataDir)) {
       fs.mkdirSync(userDataDir, { recursive: true });
     }
-    expanded = path.join(userDataDir, expanded);
+    return emUserData;
   }
-  
+
   return path.resolve(expanded);
 }
 
@@ -221,7 +243,7 @@ function createFile(filePath, content = '') {
 function readFile(filePath) {
   if (!ENABLED) return { success: false, error: 'System Controller desativado' };
   
-  const fullPath = expandPath(filePath);
+  const fullPath = expandPath(filePath, { paraLeitura: true });
   
   if (!isPathAllowed(fullPath)) {
     return { success: false, error: 'Path não permitido' };
@@ -296,7 +318,7 @@ function editFile(filePath, content, mode = 'append') {
 function listDirectory(dirPath = '.') {
   if (!ENABLED) return { success: false, error: 'System Controller desativado' };
   
-  const fullPath = expandPath(dirPath);
+  const fullPath = expandPath(dirPath, { paraLeitura: true });
   
   if (!isPathAllowed(fullPath)) {
     return { success: false, error: 'Path não permitido' };
@@ -402,7 +424,7 @@ function openFolder(folderPath) {
       return resolve({ success: false, error: 'System Controller desativado' });
     }
     
-    const fullPath = expandPath(folderPath);
+    const fullPath = expandPath(folderPath, { paraLeitura: true });
     
     if (!isPathAllowed(fullPath)) {
       return resolve({ success: false, error: 'Path não permitido' });
@@ -448,7 +470,7 @@ function runScript(scriptPath, args = []) {
       return resolve({ success: false, error: 'System Controller desativado' });
     }
     
-    const fullPath = expandPath(scriptPath);
+    const fullPath = expandPath(scriptPath, { paraLeitura: true });
     
     if (!isPathAllowed(fullPath)) {
       return resolve({ success: false, error: 'Path não permitido' });
@@ -954,15 +976,133 @@ async function listWindows() {
 // EXPORTS
 // ═══════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════
+// PROCURAR DENTRO DOS FICHEIROS
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Faltava isto, e era o que fazia o NEXO responder "cola-me o código".
+ *
+ * Listar uma pasta diz os nomes. Ler um ficheiro serve para quem já sabe qual.
+ * Para "vê no código do NEXO onde é que isto acontece" era preciso procurar
+ * dentro da árvore, e não havia maneira nenhuma de o fazer. Sem isto, ele só
+ * podia pedir ao utilizador que lhe colasse o que ele tinha ao lado.
+ *
+ * É uma busca de leitura, sem regex do utilizador: texto simples, sem
+ * maiúsculas nem minúsculas, com tecto de ficheiros e de resultados para não
+ * varrer um disco inteiro à procura de uma palavra comum.
+ */
+const PASTAS_A_SALTAR = new Set([
+  'node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage',
+  '__pycache__', '.venv', 'venv', '.cache', 'logs', 'temp'
+]);
+
+const EXTENSOES_DE_TEXTO = /\.(js|mjs|cjs|ts|tsx|jsx|json|md|txt|css|html|yml|yaml|py|sh|env|example|vbs|bat|ps1|ini|cfg|toml)$/i;
+
+const MAX_FICHEIROS_VISTOS = 4000;
+const MAX_RESULTADOS = 40;
+const MAX_TAMANHO_FICHEIRO = 512 * 1024;
+
+function procurarEmFicheiros(termo, pasta = '.', opcoes = {}) {
+  if (!ENABLED) return { success: false, error: 'System Controller desativado' };
+
+  const procurado = String(termo || '').trim();
+  if (procurado.length < 2) {
+    return { success: false, error: 'Diz-me o que procurar: pelo menos duas letras.' };
+  }
+
+  const raiz = expandPath(pasta || '.', { paraLeitura: true });
+  if (!isPathAllowed(raiz)) {
+    return { success: false, error: `Path não permitido: ${raiz}` };
+  }
+  if (!fs.existsSync(raiz)) {
+    return { success: false, error: `Pasta não encontrada: ${raiz}` };
+  }
+
+  const alvo = procurado.toLowerCase();
+  const maxResultados = Math.min(opcoes.max || MAX_RESULTADOS, MAX_RESULTADOS);
+  const achados = [];
+  let vistos = 0;
+  let truncado = false;
+
+  const descer = (dir) => {
+    if (achados.length >= maxResultados || vistos >= MAX_FICHEIROS_VISTOS) return;
+
+    let entradas;
+    try {
+      entradas = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return; // Uma pasta sem permissão não pára a busca toda.
+    }
+
+    for (const entrada of entradas) {
+      if (achados.length >= maxResultados || vistos >= MAX_FICHEIROS_VISTOS) return;
+
+      const caminho = path.join(dir, entrada.name);
+
+      if (entrada.isDirectory()) {
+        if (PASTAS_A_SALTAR.has(entrada.name) || entrada.name.startsWith('.')) continue;
+        descer(caminho);
+        continue;
+      }
+
+      if (!EXTENSOES_DE_TEXTO.test(entrada.name)) continue;
+      vistos++;
+
+      let conteudo;
+      try {
+        if (fs.statSync(caminho).size > MAX_TAMANHO_FICHEIRO) continue;
+        conteudo = fs.readFileSync(caminho, 'utf8');
+      } catch {
+        continue;
+      }
+
+      if (!conteudo.toLowerCase().includes(alvo)) continue;
+
+      const linhas = conteudo.split(/\r?\n/);
+      for (let i = 0; i < linhas.length && achados.length < maxResultados; i++) {
+        if (!linhas[i].toLowerCase().includes(alvo)) continue;
+        achados.push({
+          ficheiro: path.relative(raiz, caminho) || entrada.name,
+          linha: i + 1,
+          texto: linhas[i].trim().slice(0, 200)
+        });
+      }
+    }
+  };
+
+  descer(raiz);
+  truncado = achados.length >= maxResultados || vistos >= MAX_FICHEIROS_VISTOS;
+
+  logOperation('SEARCH_FILES', { path: raiz, termo: procurado, achados: achados.length });
+
+  if (!achados.length) {
+    return {
+      success: true, path: raiz, resultados: [],
+      message: `Não encontrei "${procurado}" em ${raiz} (${vistos} ficheiros vistos).`
+    };
+  }
+
+  const linhas = achados.map(a => `${a.ficheiro}:${a.linha}: ${a.texto}`);
+  return {
+    success: true,
+    path: raiz,
+    resultados: achados,
+    message: `🔎 "${procurado}" em ${raiz} — ${achados.length} ocorrência(s)` +
+      `${truncado ? ' (mostro só as primeiras)' : ''}:\n\n${linhas.join('\n')}`
+  };
+}
+
 module.exports = {
   // Estado
   isEnabled,
-  
+
   // Level 1 - Ficheiros
   createFile,
   readFile,
   editFile,
   listDirectory,
+  procurarEmFicheiros,
   
   // Level 1 - Comandos
   executeCommand,
