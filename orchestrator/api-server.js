@@ -244,6 +244,21 @@ function guardarPergunta(clientId, mensagem) {
 }
 
 /**
+ * Quem é o utilizador desta sessão, para efeitos de conversa e de memória.
+ *
+ * Não pode ser o id da ligação WebSocket. Esse nasce outra vez a cada
+ * reabertura da página, e com ele nascia uma conversa vazia: fechar e abrir a
+ * janela apagava o fio da conversa sem apagar nada.
+ *
+ * O NEXO é um assistente pessoal numa máquina, por isso a identidade estável
+ * é a de quem está sentado a ela. É a mesma que o orchestrator já usava, e é
+ * por isso que os dois caminhos passam agora a encontrar-se na mesma conversa.
+ */
+function utilizadorDaSessao() {
+  return security.getUserId({});
+}
+
+/**
  * O que se diz quando o modelo ficou sem espaço a meio da frase.
  *
  * Uma resposta cortada chegava ao ecrã com o aspecto de estar completa, e
@@ -928,24 +943,40 @@ async function handleWSMessage(clientId, message) {
           break;
         }
 
+        // A mesma identidade para os dois caminhos. Sem isto, o das regras
+        // guardava numa conversa e o da conversa noutra.
+        const utilizador = utilizadorDaSessao();
+
         // Verificar intent via regex (instantâneo)
         const intentParser = require('./intentParser');
         const intentData = intentParser.parseIntent(data.message);
-        
+
+        // Há trabalho a meio no orchestrator? Então é ele que continua.
+        //
+        // Um plano de projecto fica à espera de um "sim" ou "criar", e essa
+        // espera vive dentro do orchestrator. O caminho da conversa não sabia
+        // dela: depois de ver o plano, quem escrevia "criar" recebia de volta
+        // "o que gostaria de criar?" e o plano ficava para sempre pendurado.
+        const aguardaConfirmacao = router.temPlanoPendente(utilizador) &&
+          (router.ehConfirmacaoDePlano(data.message) || router.ehRecusaDePlano(data.message));
+
         // Se é um intent específico (não 'chat'), usar o router normal.
         //
         // Menos as intenções que o catálogo de ferramentas faz melhor. A regra
         // acerta na intenção e erra nos argumentos: "lista os ficheiros da
         // pasta do projeto" virava uma busca pela pasta chamada "pasta". O
         // modelo lê a frase toda antes de decidir.
-        if (intentData.intent !== 'chat' && !tools.melhorComFerramentas(intentData.intent)) {
-          console.log(`🎯 Intent detectado em stream: ${intentData.intent}`);
-          const context = { 
-            userId: clientId, 
+        if (aguardaConfirmacao ||
+            (intentData.intent !== 'chat' && !tools.melhorComFerramentas(intentData.intent))) {
+          console.log(aguardaConfirmacao
+            ? '🔨 Há um plano à espera de resposta — a seguir pelo orchestrator.'
+            : `🎯 Intent detectado em stream: ${intentData.intent}`);
+          const context = {
+            userId: utilizador,
             source: 'websocket-stream',
             conversationId: data.conversationId
           };
-          
+
           // Com prazo: foi por aqui que o NEXO ficou mudo. A frase acabava em
           // "pesquisar na web", o parser mandou-a para a pesquisa, o pedido
           // ficou pendurado e nunca voltou resposta nenhuma.
@@ -982,7 +1013,7 @@ async function handleWSMessage(clientId, message) {
         // ficheiros e depois pedia ao utilizador que lhos colasse.
         //
         // Agora o mesmo cérebro serve os dois caminhos.
-        const conversa = guardarPergunta(clientId, data.message);
+        const conversa = guardarPergunta(utilizador, data.message);
         const history = conversa.historico;
 
         const enviaToken = (token) => {
@@ -1003,7 +1034,7 @@ async function handleWSMessage(clientId, message) {
         const comFerramentas = await prazo.comPrazo(
           toolLoop.correrComStream(
             data.message,
-            { userId: clientId, historico: history },
+            { userId: utilizador, historico: history },
             { onToken: enviaToken, onProgresso: enviaProgresso }
           ),
           prazo.PRAZO_PEDIDO_MS,
@@ -1015,7 +1046,7 @@ async function handleWSMessage(clientId, message) {
           ferramentas = comFerramentas.ferramentasUsadas || [];
           cortada = comFerramentas.cortado === true;
           if (ferramentas.length) {
-            security.logAction(clientId, 'tools-used', {
+            security.logAction(utilizador, 'tools-used', {
               ferramentas, passos: comFerramentas.passos, via: 'stream'
             });
           }
@@ -1024,7 +1055,7 @@ async function handleWSMessage(clientId, message) {
           resposta = await prazo.comPrazo(
             aiAgent.askAIStream(data.message, history, enviaToken, {
               temperature: 0.7,
-              userId: clientId,
+              userId: utilizador,
               aoTerminar: (m) => { cortada = m.cortado === true; }
             }),
             prazo.PRAZO_PEDIDO_MS,

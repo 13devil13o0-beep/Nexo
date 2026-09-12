@@ -1298,7 +1298,7 @@ async function handlePrompt(prompt, context = {}) {
       case 'chat':
       default:
         // Verificar se há um plano de projeto pendente e o user confirmou
-        if (conversation._pendingPlan && /^(?:sim|yes|criar|cria|build|ok|confirmo|avança|go)\b/i.test(prompt)) {
+        if (conversation._pendingPlan && ehConfirmacaoDePlano(prompt)) {
           console.log('🔨 Utilizador confirmou – a construir projeto...');
           const buildResult = await projectBuilder.buildProject(conversation._pendingPlan);
           delete conversation._pendingPlan;
@@ -1306,7 +1306,7 @@ async function handlePrompt(prompt, context = {}) {
           break;
         }
         // Cancelar plano pendente se user disser não
-        if (conversation._pendingPlan && /^(?:não|nao|no|cancela|cancel)\b/i.test(prompt)) {
+        if (conversation._pendingPlan && ehRecusaDePlano(prompt)) {
           delete conversation._pendingPlan;
           response = t('project.cancelled');
           break;
@@ -1717,8 +1717,69 @@ async function executeChainStep(agentName, input, userId, conversation) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════
+// RESPONDER A UM PLANO QUE FICOU À ESPERA
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * A pessoa está a dizer "sim, faz isso" ao plano que ficou à espera?
+ *
+ * O teste antigo exigia que a mensagem COMEÇASSE por uma palavra de uma lista
+ * curta. "vamos entao criar esse projecto" não começava por nenhuma delas e
+ * caía em conversa, com o plano a ficar pendurado para sempre.
+ *
+ * Não basta procurar o verbo em qualquer sítio: "vamos criar um projecto para
+ * a minha agenda diária" é um pedido novo, não uma confirmação do anterior.
+ * A diferença está no tamanho. Uma confirmação é curta, porque o assunto já
+ * está dito. Quem descreve algo novo escreve mais.
+ */
+const MAX_PALAVRAS_DE_CONFIRMACAO = 8;
+
+function curta(texto) {
+  return String(texto || '').trim().split(/\s+/).length <= MAX_PALAVRAS_DE_CONFIRMACAO;
+}
+
+function ehConfirmacaoDePlano(prompt) {
+  const texto = String(prompt || '').trim();
+  if (!texto) return false;
+
+  // Começa logo por uma palavra de acordo: chega, seja qual for o resto.
+  if (/^(?:sim|yes|ok|okay|claro|certo|confirmo|avança|avanca|go|build)\b/i.test(texto)) return true;
+
+  // Um verbo de construir, numa mensagem curta.
+  return curta(texto) &&
+    /\b(?:cria|criar|cria-o|constr[óo]i|construir|constroi|faz|fazer|build|gera|gerar)\b/i.test(texto);
+}
+
+function ehRecusaDePlano(prompt) {
+  const texto = String(prompt || '').trim();
+  if (!texto) return false;
+  if (/^(?:n[ãa]o|no|nope|cancela|cancelar|cancel|esquece|deixa)\b/i.test(texto)) return true;
+  return curta(texto) && /\b(?:cancela|cancelar|esquece|esquecer)\b/i.test(texto);
+}
+
+/**
+ * Ficou um plano de projecto à espera de resposta deste utilizador?
+ *
+ * A espera vive aqui dentro, num campo da conversa, e o caminho com streaming
+ * não sabia dela. Depois de ver o plano, quem escrevia "criar" recebia de
+ * volta "o que gostaria de criar?" e o plano ficava pendurado para sempre.
+ * Quem serve o pedido precisa de poder perguntar isto antes de decidir.
+ */
+function temPlanoPendente(userId) {
+  try {
+    const conversa = conversationStore.getOrCreateConversation(userId);
+    return !!(conversa && conversa._pendingPlan);
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
   handlePrompt,
+  temPlanoPendente,
+  ehConfirmacaoDePlano,
+  ehRecusaDePlano,
   getSystemInfo,
   getAgentsList,
   getHelpMessage

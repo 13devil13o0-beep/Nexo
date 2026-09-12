@@ -98,16 +98,24 @@ class ConversationStore {
    * Obtém ou cria conversa para utilizador
    */
   getOrCreateConversation(userId) {
-    // Procura conversa ativa do utilizador
-    for (const [id, conv] of this.conversations) {
-      if (conv.userId === userId && Date.now() - conv.updatedAt < 3600000) {
-        return conv;
-      }
+    // Procura a conversa activa mais recente deste utilizador. A mais recente
+    // e não a primeira que aparecer: o Map não tem ordem garantida, e apanhar
+    // uma antiga é apanhar um fio de conversa que já não é o actual.
+    let melhor = null;
+    for (const conv of this.conversations.values()) {
+      if (conv.userId !== userId) continue;
+      if (Date.now() - conv.updatedAt >= 3600000) continue;
+      if (!melhor || conv.updatedAt > melhor.updatedAt) melhor = conv;
     }
-    
-    // Cria nova
+    if (melhor) return melhor;
+
+    // Cria nova. O dono tem de ser gravado: o createConversation grava antes
+    // de o userId existir, e sem esta segunda gravação a conversa ficava em
+    // disco sem dono. Ao reiniciar o Core, ninguém a reconhecia e começava-se
+    // de novo, com o fio da conversa anterior perdido sem nada ser apagado.
     const conv = this.createConversation();
     conv.userId = userId;
+    this.saveConversations();
     return conv;
   }
   
@@ -149,18 +157,51 @@ class ConversationStore {
   }
   
   /**
-   * Obtém histórico formatado para contexto do LLM
+   * Obtém histórico formatado para contexto do LLM.
+   *
+   * O corte era por mensagem, aos 2000 caracteres. Um plano de projecto tem
+   * seis mil, por isso chegava ao modelo com dois terços cortados: ele via o
+   * título e pouco mais, e depois respondia que não sabia do que se falava.
+   *
+   * O orçamento passa a ser do conjunto, e gasta-se de trás para a frente. O
+   * que acabou de ser dito entra inteiro, e é o mais antigo que cede o lugar.
+   * Um tecto total é preciso: o plano grátis do Groq são 8000 tokens por
+   * minuto, e mandar dez mensagens longas em cada pedido esgota-os sozinho.
    */
-  getHistoryForContext(conversationId, maxMessages = 10) {
+  getHistoryForContext(conversationId, maxMessages = 10, maxCaracteres = 12000) {
     const conversation = this.conversations.get(conversationId);
     if (!conversation) return [];
-    
-    return conversation.messages
-      .slice(-maxMessages)
-      .map(m => ({
-        role: m.role,
-        content: m.content.substring(0, 2000) // Limita tamanho
-      }));
+
+    const candidatas = conversation.messages.slice(-maxMessages);
+    const escolhidas = [];
+    let gasto = 0;
+
+    // Abaixo disto, um pedaço de mensagem não é contexto: é ruído que ocupa
+    // espaço e confunde quem o lê. Mais vale a mensagem não ir.
+    const MINIMO_UTIL = 200;
+
+    for (let i = candidatas.length - 1; i >= 0; i--) {
+      const m = candidatas[i];
+      const texto = String(m.content ?? '');
+      if (!texto) continue;
+
+      const espaco = maxCaracteres - gasto;
+      if (espaco <= 0) break;
+      if (escolhidas.length > 0 && espaco < MINIMO_UTIL && texto.length > espaco) break;
+
+      // A mensagem mais recente entra sempre, mesmo que ocupe o orçamento
+      // todo: sem ela não há conversa nenhuma para continuar.
+      const conteudo = texto.length <= espaco
+        ? texto
+        : (escolhidas.length === 0
+            ? texto.slice(-espaco)
+            : texto.slice(0, espaco) + '\n[...]');
+
+      escolhidas.push({ role: m.role, content: conteudo });
+      gasto += conteudo.length;
+    }
+
+    return escolhidas.reverse();
   }
   
   /**

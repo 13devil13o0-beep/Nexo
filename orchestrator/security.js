@@ -177,6 +177,16 @@ function rateLimitMiddleware(req, res, next) {
  * Gera ID único para utilizador baseado no contexto
  */
 function getUserId(context = {}) {
+  // Quem chama e diz quem é, é acreditado.
+  //
+  // Isto faltava, e o parâmetro era aceite e ignorado em silêncio. O servidor
+  // passava { userId: <id do cliente> } e recebia de volta 'cli:<utilizador>',
+  // sempre. Consequência: metade das mensagens era guardada numa conversa e
+  // metade noutra, e o NEXO perdia o fio entre uma mensagem e a seguinte.
+  if (context.userId) {
+    return String(context.userId);
+  }
+
   if (context.telegramChatId) {
     return `telegram:${context.telegramChatId}`;
   }

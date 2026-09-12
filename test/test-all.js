@@ -3458,6 +3458,222 @@ describe('✂️ Uma resposta cortada tem de dizer que foi cortada', () => {
     assertEqual(visto.cortado, false);
   });
 });
+
+// ═══════════════════════════════════════════════════════════
+// UMA CONVERSA, UMA IDENTIDADE
+// ═══════════════════════════════════════════════════════════
+
+describe('🪪 Quem diz quem é, é acreditado', () => {
+  const security = require('../orchestrator/security');
+
+  test('um userId explícito é respeitado', () => {
+    // Era aceite e ignorado em silêncio. O servidor passava o id do cliente e
+    // recebia de volta 'cli:<utilizador>', sempre. Metade das mensagens ficava
+    // numa conversa e metade noutra, e o NEXO perdia o fio entre mensagens.
+    assertEqual(security.getUserId({ userId: 'abc-123' }), 'abc-123');
+    assertEqual(security.getUserId({ userId: 'abc-123', source: 'websocket' }), 'abc-123');
+  });
+
+  test('sem userId, os canais continuam a ser reconhecidos', () => {
+    assertEqual(security.getUserId({ telegramChatId: 55 }), 'telegram:55');
+    assertEqual(security.getUserId({ discordUserId: 'd1' }), 'discord:d1');
+    assertEqual(security.getUserId({ webSessionId: 'w1' }), 'web:w1');
+  });
+
+  test('sem nada, cai no utilizador da máquina', () => {
+    assertMatch(security.getUserId({}), /^cli:/);
+  });
+});
+
+
+describe('💾 A conversa tem dono, e o dono fica gravado', () => {
+  const { ConversationStore } = (() => {
+    const m = require('../memory/conversationStore');
+    return { ConversationStore: m.ConversationStore || m.conversationStore.constructor };
+  })();
+
+  test('duas mensagens seguidas do mesmo utilizador ficam na mesma conversa', () => {
+    const loja = new ConversationStore();
+    const a = loja.getOrCreateConversation('utilizador-teste-x');
+    const b = loja.getOrCreateConversation('utilizador-teste-x');
+    assertEqual(a.id, b.id, 'devia reaproveitar a conversa activa');
+  });
+
+  test('utilizadores diferentes não partilham conversa', () => {
+    const loja = new ConversationStore();
+    const a = loja.getOrCreateConversation('utilizador-teste-y');
+    const b = loja.getOrCreateConversation('utilizador-teste-z');
+    assert(a.id !== b.id);
+  });
+
+  test('a conversa nova nasce já com dono', () => {
+    // O createConversation grava antes de o userId existir. Sem a segunda
+    // gravação, a conversa ficava em disco sem dono: ao reiniciar o Core
+    // ninguém a reconhecia e o fio anterior perdia-se sem nada ser apagado.
+    const loja = new ConversationStore();
+    const c = loja.getOrCreateConversation('utilizador-teste-w');
+    assertEqual(c.userId, 'utilizador-teste-w');
+  });
+
+  test('entre duas conversas do mesmo dono, escolhe-se a mais recente', () => {
+    const loja = new ConversationStore();
+    const velha = loja.createConversation();
+    velha.userId = 'utilizador-teste-v';
+    velha.updatedAt = Date.now() - 60000;
+
+    const nova = loja.createConversation();
+    nova.userId = 'utilizador-teste-v';
+    nova.updatedAt = Date.now();
+
+    assertEqual(loja.getOrCreateConversation('utilizador-teste-v').id, nova.id);
+  });
+});
+
+
+describe('📜 O histórico chega inteiro ao modelo', () => {
+  const m = require('../memory/conversationStore');
+  const ConversationStore = m.ConversationStore || m.conversationStore.constructor;
+
+  function comMensagens(mensagens) {
+    const loja = new ConversationStore();
+    const c = loja.createConversation();
+    for (const msg of mensagens) loja.addMessage(c.id, msg);
+    return { loja, id: c.id };
+  }
+
+  test('uma mensagem longa já não é cortada aos 2000 caracteres', () => {
+    // Um plano de projecto tem seis mil caracteres. Chegava ao modelo com dois
+    // terços cortados: ele via o título e pouco mais, e a seguir respondia que
+    // não sabia do que se estava a falar.
+    const plano = 'PLANO ' + 'x'.repeat(5000) + ' FIM DO PLANO';
+    const { loja, id } = comMensagens([{ role: 'assistant', content: plano }]);
+    const h = loja.getHistoryForContext(id, 10);
+    assertEqual(h.length, 1);
+    assert(h[0].content.length > 2000, `ficou com ${h[0].content.length}`);
+    assertIncludes(h[0].content, 'FIM DO PLANO');
+  });
+
+  test('o orçamento é do conjunto, e gasta-se do mais recente para trás', () => {
+    const { loja, id } = comMensagens([
+      { role: 'user', content: 'MUITO ANTIGA ' + 'a'.repeat(9000) },
+      { role: 'assistant', content: 'DO MEIO ' + 'b'.repeat(3000) },
+      { role: 'user', content: 'A MAIS RECENTE' }
+    ]);
+    const h = loja.getHistoryForContext(id, 10, 6000);
+    const tudo = h.map(x => x.content).join('');
+
+    assert(tudo.length <= 6200, `orçamento estourado: ${tudo.length}`);
+
+    // O que acabou de ser dito entra inteiro. As do meio também, se couberem.
+    assertIncludes(tudo, 'A MAIS RECENTE');
+    assertIncludes(tudo, 'b'.repeat(3000));
+
+    // A mais antiga fica com o que sobrou do orçamento, e diz que foi cortada.
+    // Um pedaço do princípio vale mais do que deixá-la de fora por inteiro.
+    const antiga = h.find(x => x.content.startsWith('MUITO ANTIGA'));
+    assert(antiga, 'devia ter entrado o que couber dela');
+    assert(antiga.content.length < 9013, 'devia estar cortada');
+    assertIncludes(antiga.content, '[...]');
+  });
+
+  test('quando o orçamento é muito pequeno, só a mais recente sobrevive', () => {
+    const { loja, id } = comMensagens([
+      { role: 'user', content: 'MUITO ANTIGA ' + 'a'.repeat(9000) },
+      { role: 'user', content: 'A MAIS RECENTE' }
+    ]);
+    const h = loja.getHistoryForContext(id, 10, 20);
+    assertEqual(h.length, 1);
+    assertIncludes(h[0].content, 'RECENTE');
+  });
+
+  test('a ordem da conversa mantém-se', () => {
+    const { loja, id } = comMensagens([
+      { role: 'user', content: 'primeira' },
+      { role: 'assistant', content: 'segunda' },
+      { role: 'user', content: 'terceira' }
+    ]);
+    const h = loja.getHistoryForContext(id, 10);
+    assertEqual(h.map(x => x.content).join(','), 'primeira,segunda,terceira');
+  });
+
+  test('a mensagem mais recente entra sempre, mesmo se for enorme', () => {
+    // Sem ela não há conversa nenhuma para continuar.
+    const { loja, id } = comMensagens([{ role: 'user', content: 'z'.repeat(20000) }]);
+    const h = loja.getHistoryForContext(id, 10, 500);
+    assertEqual(h.length, 1);
+    assert(h[0].content.length > 0);
+  });
+
+  test('uma conversa que não existe devolve histórico vazio, não rebenta', () => {
+    const loja = new ConversationStore();
+    assertEqual(loja.getHistoryForContext('nao-existe').length, 0);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// UM PLANO À ESPERA NÃO PODE FICAR PENDURADO
+// ═══════════════════════════════════════════════════════════
+
+describe('🔨 Responder a um plano de projecto', () => {
+  const orchestrator = require('../orchestrator/orchestrator');
+
+  test('"criar" é uma confirmação', () => {
+    assert(orchestrator.ehConfirmacaoDePlano('criar'));
+    assert(orchestrator.ehConfirmacaoDePlano('sim'));
+    assert(orchestrator.ehConfirmacaoDePlano('ok'));
+  });
+
+  test('"vamos entao criar esse projecto" também é', () => {
+    // O teste antigo exigia que a mensagem COMEÇASSE por uma palavra de uma
+    // lista curta. Esta não começava, caía em conversa, e o plano ficava
+    // pendurado para sempre.
+    assert(orchestrator.ehConfirmacaoDePlano('vamos entao criar esse projecto'));
+    assert(orchestrator.ehConfirmacaoDePlano('podes construir'));
+    assert(orchestrator.ehConfirmacaoDePlano('faz isso'));
+  });
+
+  test('descrever um projecto novo não é confirmar o anterior', () => {
+    // A diferença está no tamanho: uma confirmação é curta, porque o assunto
+    // já está dito. Quem descreve algo novo escreve mais.
+    assert(!orchestrator.ehConfirmacaoDePlano(
+      'vamos criar um projecto para que todos os dias no meu pc apareca a minha agenda ' +
+      'e como continuar a ordem de trabalhos do dia anterior'
+    ));
+    assert(!orchestrator.ehConfirmacaoDePlano('cria uma app de lista de tarefas com react e testes'));
+  });
+
+  test('elogiar o plano não é mandar construí-lo', () => {
+    assert(!orchestrator.ehConfirmacaoDePlano('adorei, era mesmo isso que tinha idealizado'));
+  });
+
+  test('recusar cancela', () => {
+    assert(orchestrator.ehRecusaDePlano('não'));
+    assert(orchestrator.ehRecusaDePlano('cancela'));
+    assert(orchestrator.ehRecusaDePlano('esquece isso'));
+    assert(!orchestrator.ehRecusaDePlano('criar'));
+  });
+
+  test('vazio não é nem uma coisa nem outra', () => {
+    assert(!orchestrator.ehConfirmacaoDePlano(''));
+    assert(!orchestrator.ehRecusaDePlano(null));
+  });
+
+  test('quem serve o pedido pode perguntar se há plano à espera', () => {
+    // A espera vive dentro do orchestrator, e o caminho com streaming não
+    // sabia dela: depois de ver o plano, quem escrevia "criar" recebia de
+    // volta "o que gostaria de criar?".
+    assertEqual(typeof orchestrator.temPlanoPendente, 'function');
+    assertEqual(orchestrator.temPlanoPendente('ninguem-com-plano-xyz'), false);
+  });
+
+  test('o router deixa passar o que o servidor precisa', () => {
+    const router = require('../orchestrator/router');
+    for (const f of ['temPlanoPendente', 'ehConfirmacaoDePlano', 'ehRecusaDePlano']) {
+      assertEqual(typeof router[f], 'function', `falta ${f} no router`);
+    }
+  });
+});
 // ═══════════════════════════════════════════════════════════
 // RESULTADO FINAL
 // ═══════════════════════════════════════════════════════════
