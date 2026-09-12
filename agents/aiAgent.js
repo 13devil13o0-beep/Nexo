@@ -14,6 +14,15 @@ const GROQ_MODEL = llmRouter.PROVIDERS.groq.model;
 const FALLBACK_MODEL = llmRouter.PROVIDERS.groq.fallbackModel;
 
 /**
+ * Quanto espaço tem uma resposta.
+ *
+ * Estava em 2048 e chegava para conversa, não para trabalho. Uma resposta com
+ * tabelas e vários pontos batia no tecto e era cortada a meio de uma frase,
+ * sem aviso: no ecrã parecia acabada, e acabava no meio de "criar um".
+ */
+const MAX_TOKENS_RESPOSTA = parseInt(process.env.RESPOSTA_MAX_TOKENS) || 4096;
+
+/**
  * O texto de sistema tem de dizer a verdade sobre o que ele consegue fazer.
  *
  * A lista anterior dizia "executar tarefas" e "criar documentos" sem dizer
@@ -61,7 +70,7 @@ async function askAI(prompt, history = [], options = {}) {
     return '⚠️ IA não configurada. Adiciona pelo menos GROQ_API_KEY ao .env';
   }
 
-  const maxTokens = options.maxTokens || 2048;
+  const maxTokens = options.maxTokens || MAX_TOKENS_RESPOSTA;
   const temperature = options.temperature || 0.7;
   const systemPrompt = options.system || DEFAULT_SYSTEM;
 
@@ -113,7 +122,7 @@ async function askAIStream(prompt, history = [], onToken, options = {}) {
     return msg;
   }
 
-  const maxTokens = options.maxTokens || 2048;
+  const maxTokens = options.maxTokens || MAX_TOKENS_RESPOSTA;
   const temperature = options.temperature || 0.7;
   const systemPrompt = options.system || DEFAULT_SYSTEM;
 
@@ -135,6 +144,11 @@ async function askAIStream(prompt, history = [], onToken, options = {}) {
       (fullText, metadata) => {
         if (metadata?.provider) {
           console.log(`  🧠 Stream via ${metadata.provider} (${metadata.model || ''})`);
+        }
+        // Quem chamou precisa de saber se a resposta foi cortada por falta de
+        // espaço. Sem isto chega ao ecrã com o aspecto de estar completa.
+        if (typeof options.aoTerminar === 'function') {
+          try { options.aoTerminar(metadata || {}); } catch {}
         }
         resolve(fullText);
       },

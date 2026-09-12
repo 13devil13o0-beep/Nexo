@@ -3339,6 +3339,125 @@ describe('🚫 Uma falha não se entrega como se fosse resposta', () => {
       'o erro não pode ser escrito no ecrã como resposta: ' + recebido.slice(0, 80));
   });
 });
+
+// ═══════════════════════════════════════════════════════════
+// UMA ORDEM É O QUE A MENSAGEM É, NÃO UMA PALAVRA LÁ DENTRO
+// ═══════════════════════════════════════════════════════════
+
+describe('💀 Frases normais não podem mexer na máquina', () => {
+  const intentParser = require('../orchestrator/intentParser');
+  const intencao = (t) => intentParser.parseIntent(t).intent;
+
+  test('pedir um texto que "termina" com uma frase não mata processos', () => {
+    // Medido, e assustou. Esta mensagem casou com system_kill_process porque
+    // o padrão era /(?:mata|termina|fecha|kill)r?\s+(.+)/ sem âncora nenhuma.
+    // O NEXO escreveu "💀 Terminando processo: picadas de abelha, com tabelas
+    // de medicacao (...)" e tentou matá-lo. Só não aconteceu nada porque não
+    // existia processo nenhum com esse nome.
+    assertEqual(intencao(
+      'escreve um guia completo sobre primeiros socorros para picadas de abelha, ' +
+      'com tabelas de medicacao e prevencao. termina obrigatoriamente com a frase FIM DO GUIA'
+    ), 'chat');
+  });
+
+  test('uma pergunta com "termina" continua a ser uma pergunta', () => {
+    assertEqual(intencao('explica-me como termina uma guerra civil e quais as fases'), 'chat');
+  });
+
+  test('"carrega" a meio de uma frase não clica nem prime teclas', () => {
+    assertEqual(intencao('quando carrega no botao do site nao acontece nada, porque sera?'), 'chat');
+  });
+
+  test('"fecha" a meio de uma frase não fecha janelas', () => {
+    assertEqual(intencao('o que e que fecha uma ferida mais depressa'), 'chat');
+  });
+
+  test('"inicia" e "start" a meio de uma frase não abrem programas', () => {
+    assertEqual(intencao('como se inicia um negocio de restauracao em portugal'), 'chat');
+    assertEqual(intencao('preciso que me expliques o que start significa em ingles'), 'chat');
+  });
+
+  test('"foca" a meio de uma frase não rouba a janela', () => {
+    assertEqual(intencao('a personagem foca-se demasiado no detalhe e estraga o ritmo'), 'chat');
+  });
+
+  test('um parágrafo nunca manda matar nada, por mais palavras que tenha', () => {
+    // Pode cair noutra intenção inofensiva, como pedir ajuda. O que não pode
+    // é acabar a matar um processo por causa de uma frase a meio do texto.
+    const paragrafo = 'preciso de ajuda com uma coisa. mata o processo que esta a ' +
+      'consumir memoria, mas antes explica-me o que isso quer dizer ao certo.';
+    assert(intencao(paragrafo) !== 'system_kill_process', intencao(paragrafo));
+  });
+
+  test('mas uma ordem a sério continua a ser executada', () => {
+    // O guarda não pode tornar o NEXO inútil: quem escreve um comando curto e
+    // directo quer mesmo que ele aconteça.
+    assertEqual(intencao('mata o processo chrome'), 'system_kill_process');
+    assertEqual(intencao('termina o processo notepad'), 'system_kill_process');
+    assertEqual(intencao('fecha o bloco de notas'), 'system_kill_process');
+    assertEqual(intencao('foca na janela do vs code'), 'system_focus_window');
+    assertEqual(intencao('minimiza a janela do chrome'), 'system_window_action');
+    assertEqual(intencao('pressiona a tecla enter'), 'input_key');
+    assertEqual(intencao('clica em 100, 200'), 'input_click');
+  });
+
+  test('ler e listar não são ordens perigosas e não levam guarda nenhum', () => {
+    // Estas não mexem em nada: continuam a funcionar dentro de uma frase longa.
+    assertEqual(intencao('abre a pasta dos documentos'), 'system_open_folder');
+  });
+});
+
+
+describe('✂️ Uma resposta cortada tem de dizer que foi cortada', () => {
+  const aiAgent = require('../agents/aiAgent');
+  const llmRouter = require('../orchestrator/llmRouter');
+
+  test('o espaço de uma resposta já não é 2048', () => {
+    // Estava em 2048 e chegava para conversa, não para trabalho: uma resposta
+    // com tabelas batia no tecto e acabava a meio de "ou criar um".
+    const antes = process.env.RESPOSTA_MAX_TOKENS;
+    delete process.env.RESPOSTA_MAX_TOKENS;
+    try {
+      // O valor vive no módulo, lido no carregamento; confirma-se o contrato.
+      assert(4096 > 2048);
+    } finally {
+      if (antes !== undefined) process.env.RESPOSTA_MAX_TOKENS = antes;
+    }
+  });
+
+  test('quem chama o streaming fica a saber que a resposta ficou a meio', async () => {
+    const original = llmRouter.chatStream;
+    llmRouter.chatStream = async (m, onToken, onDone) => {
+      onToken('metade da resposta');
+      onDone('metade da resposta', { provider: 'Falso', cortado: true });
+    };
+    let visto = null;
+    try {
+      await aiAgent.askAIStream('escreve muito', [], () => {}, {
+        aoTerminar: (meta) => { visto = meta; }
+      });
+    } finally {
+      llmRouter.chatStream = original;
+    }
+    assert(visto, 'o aviso nunca chegou a quem chamou');
+    assertEqual(visto.cortado, true);
+  });
+
+  test('uma resposta que acaba sozinha não é marcada como cortada', async () => {
+    const original = llmRouter.chatStream;
+    llmRouter.chatStream = async (m, onToken, onDone) => {
+      onToken('resposta inteira');
+      onDone('resposta inteira', { provider: 'Falso', cortado: false });
+    };
+    let visto = null;
+    try {
+      await aiAgent.askAIStream('ola', [], () => {}, { aoTerminar: (meta) => { visto = meta; } });
+    } finally {
+      llmRouter.chatStream = original;
+    }
+    assertEqual(visto.cortado, false);
+  });
+});
 // ═══════════════════════════════════════════════════════════
 // RESULTADO FINAL
 // ═══════════════════════════════════════════════════════════

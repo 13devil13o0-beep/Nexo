@@ -782,7 +782,20 @@ class MyBotApp {
   acompanharFundo() {
     const area = this.elements.messagesArea;
     if (!area || this._coladoAoFundo === false) return;
-    area.scrollTop = area.scrollHeight;
+
+    // Sem suavização, e é de propósito.
+    //
+    // A área das mensagens tem scroll-behavior: smooth no CSS, o que é bom
+    // para um salto pedido de uma vez. Durante uma resposta a chegar era o
+    // contrário: a cada fotograma marcava-se um destino novo e o navegador
+    // recomeçava a animação para lá. A vista andava sempre atrás de um alvo
+    // que fugia, e o que se via era a conversa a subir e a descer sem parar
+    // até a resposta acabar.
+    //
+    // Tem de ser 'instant'. O 'auto' não força nada: quer dizer "decide tu",
+    // e o navegador decide pelo que está no CSS, que é exactamente a
+    // suavização que aqui estorva.
+    area.scrollTo({ top: area.scrollHeight, behavior: 'instant' });
   }
 
   vigiarScroll() {

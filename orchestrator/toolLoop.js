@@ -21,6 +21,19 @@ const tools = require('./tools');
 const MAX_PASSOS = parseInt(process.env.TOOLS_MAX_STEPS) || 4;
 const ACTIVO = process.env.TOOLS_ENABLED !== '0';
 
+/**
+ * Quanto espaço tem uma resposta.
+ *
+ * Estava em 2048 e chegava para conversa, não para trabalho. Uma resposta com
+ * tabelas e vários pontos batia no tecto e era cortada a meio de uma frase,
+ * sem aviso nenhum: no ecrã parecia uma resposta acabada que não fazia
+ * sentido no fim.
+ *
+ * 4096 é o dobro e continua dentro do que o plano grátis do Groq aguenta
+ * (8000 tokens por minuto). Quem tiver plano pago pode subir isto.
+ */
+const MAX_TOKENS_RESPOSTA = parseInt(process.env.RESPOSTA_MAX_TOKENS) || 4096;
+
 const SISTEMA = `És o NEXO, um assistente pessoal que corre no computador do utilizador.
 
 Tens ferramentas e corres na máquina dele. Não peças ao utilizador que te cole
@@ -222,7 +235,13 @@ async function correrComStream(mensagem, contexto = {}, saidas = {}) {
     // Sem chamadas, o modelo respondeu e o texto já foi para o ecrã. Fim.
     if (!chamadas || !chamadas.length) {
       if (!escrito.trim()) return null;
-      return { texto: escrito, ferramentasUsadas: usadas, passos: passo, provider: fornecedor };
+      return {
+        texto: escrito,
+        ferramentasUsadas: usadas,
+        passos: passo,
+        provider: fornecedor,
+        cortado: volta.cortado === true
+      };
     }
 
     // Guardar o turno do assistente tal como veio, senão o modelo perde o fio.
@@ -334,7 +353,7 @@ async function responderComOApurado(mensagens, pergunta, onToken, contexto) {
  * devolve-se tudo junto, para o ciclo acima se ler de cima a baixo.
  */
 async function umaVolta(mensagens, esquemas, onToken, contexto) {
-  let recolhido = { texto: '', toolCalls: null, raw: undefined, provider: null };
+  let recolhido = { texto: '', toolCalls: null, raw: undefined, provider: null, cortado: false };
 
   try {
     await llmRouter.chatStream(
@@ -346,12 +365,13 @@ async function umaVolta(mensagens, esquemas, onToken, contexto) {
           toolCalls: meta.toolCalls || null,
           raw: meta.raw,
           provider: meta.provider || null,
+          cortado: meta.cortado === true,
           noToolProvider: meta.noToolProvider === true
         };
       },
       {
         tools: esquemas,
-        maxTokens: 2048,
+        maxTokens: MAX_TOKENS_RESPOSTA,
         temperature: 0.3,
         userId: contexto.userId
       }

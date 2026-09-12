@@ -243,6 +243,16 @@ function guardarPergunta(clientId, mensagem) {
   }
 }
 
+/**
+ * O que se diz quando o modelo ficou sem espaço a meio da frase.
+ *
+ * Uma resposta cortada chegava ao ecrã com o aspecto de estar completa, e
+ * acabava a meio de uma palavra sem explicação nenhuma. Agora diz-se, e
+ * diz-se como continuar: o histórico é guardado, por isso "continua" pega no
+ * fio onde ele ficou.
+ */
+const AVISO_CORTADA = '\n\n_(a resposta ficou a meio por ser muito longa — diz "continua" para o resto)_';
+
 function guardarResposta(conversaId, texto) {
   if (!conversaId || !texto) return;
   try {
@@ -406,6 +416,7 @@ app.post('/api/chat/stream', security.authMiddleware, async (req, res) => {
 
     let fullResponse = '';
     let ferramentas = [];
+    let cortada = false;
 
     const comFerramentas = await prazo.comPrazo(
       toolLoop.correrComStream(
@@ -420,10 +431,13 @@ app.post('/api/chat/stream', security.authMiddleware, async (req, res) => {
     if (comFerramentas && comFerramentas.texto) {
       fullResponse = comFerramentas.texto;
       ferramentas = comFerramentas.ferramentasUsadas || [];
+      cortada = comFerramentas.cortado === true;
     } else {
       fullResponse = await prazo.comPrazo(
         aiAgent.askAIStream(enrichedMessage, conversa.historico, enviaToken, {
-          maxTokens: 2048, temperature: 0.7, userId
+          temperature: 0.7,
+          userId,
+          aoTerminar: (m) => { cortada = m.cortado === true; }
         }),
         prazo.PRAZO_PEDIDO_MS,
         'O pedido'
@@ -435,6 +449,8 @@ app.post('/api/chat/stream', security.authMiddleware, async (req, res) => {
       enviaToken(fullResponse);
     }
 
+    if (cortada) enviaToken(AVISO_CORTADA);
+
     guardarResposta(conversa.id, fullResponse);
 
     // Enviar evento final com metadata
@@ -442,6 +458,7 @@ app.post('/api/chat/stream', security.authMiddleware, async (req, res) => {
       type: 'done',
       response: fullResponse,
       ferramentas,
+      cortada,
       conversationId
     })}\n\n`);
 
@@ -981,6 +998,7 @@ async function handleWSMessage(clientId, message) {
 
         let resposta = '';
         let ferramentas = [];
+        let cortada = false;
 
         const comFerramentas = await prazo.comPrazo(
           toolLoop.correrComStream(
@@ -995,6 +1013,7 @@ async function handleWSMessage(clientId, message) {
         if (comFerramentas && comFerramentas.texto) {
           resposta = comFerramentas.texto;
           ferramentas = comFerramentas.ferramentasUsadas || [];
+          cortada = comFerramentas.cortado === true;
           if (ferramentas.length) {
             security.logAction(clientId, 'tools-used', {
               ferramentas, passos: comFerramentas.passos, via: 'stream'
@@ -1004,7 +1023,9 @@ async function handleWSMessage(clientId, message) {
           // O nível das ferramentas não se aplicou. Conversa simples.
           resposta = await prazo.comPrazo(
             aiAgent.askAIStream(data.message, history, enviaToken, {
-              maxTokens: 2048, temperature: 0.7, userId: clientId
+              temperature: 0.7,
+              userId: clientId,
+              aoTerminar: (m) => { cortada = m.cortado === true; }
             }),
             prazo.PRAZO_PEDIDO_MS,
             'O pedido'
@@ -1018,13 +1039,17 @@ async function handleWSMessage(clientId, message) {
           enviaToken(resposta);
         }
 
+        // O aviso vai para o ecrã mas não para a memória: guardada fica só a
+        // resposta, para um "continua" a seguir pegar no fio onde ele ficou.
+        if (cortada) enviaToken(AVISO_CORTADA);
+
         guardarResposta(conversa.id, resposta);
 
         if (client.ws.readyState === WebSocket.OPEN) {
           client.ws.send(JSON.stringify({
             type: 'stream_done',
             requestId,
-            data: { conversationId: data.conversationId, ferramentas }
+            data: { conversationId: data.conversationId, ferramentas, cortada }
           }));
         }
       } catch (error) {

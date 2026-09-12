@@ -288,10 +288,12 @@ const INTENT_PATTERNS = {
       /abre?\s+(?:o\s+)?(?:programa|app|aplicação|aplicativo)\s+(.+)/i,
       /abrir\s+(?:o\s+)?(?:programa|app|aplicação)\s+(.+)/i,
       /abre?\s+(?:o\s+)?(notepad|chrome|firefox|edge|vscode|code|terminal|calculadora|word|excel|spotify|discord)/i,
-      /inicia(?:r)?\s+(?:o\s+)?(.+)/i,
-      /launch\s+(.+)/i,
-      /open\s+(?:app\s+)?(.+)/i,
-      /start\s+(.+)/i
+      // Ancorados: "inicia" e "start" aparecem em qualquer texto, e abrir um
+      // programa no computador de alguém não é coisa para acontecer de raspão.
+      /^\s*inicia(?:r)?\s+(?:o\s+)?(.+)/i,
+      /^\s*launch\s+(.+)/i,
+      /^\s*open\s+(?:app\s+)?(.+)/i,
+      /^\s*start\s+(.+)/i
     ],
     extract: (text) => {
       const match = text.match(/(?:abre?|abrir|inicia|launch|open|start)\s+(?:o\s+)?(?:programa|app|aplicação|aplicativo)?\s*(.+)/i);
@@ -337,7 +339,10 @@ const INTENT_PATTERNS = {
   system_kill_process: {
     patterns: [
       /(?:mata|termina|fecha|kill|encerra)(?:r)?\s+(?:o\s+)?processo\s+(.+)/i,
-      /(?:mata|termina|fecha|kill)(?:r)?\s+(.+)/i,
+      // Ancorado ao início de propósito. Sem a âncora, qualquer frase com a
+      // palavra "termina" lá dentro virava uma ordem para matar um processo:
+      // "explica-me como termina uma guerra civil" era uma delas.
+      /^\s*(?:mata|termina|fecha|kill)(?:r)?\s+(.+)/i,
       /para(?:r)?\s+(?:o\s+)?processo\s+(.+)/i,
       /taskkill\s+(.+)/i,
       /força(?:r)?\s+(?:o\s+)?fecho\s+(?:de\s+)?(.+)/i
@@ -368,7 +373,7 @@ const INTENT_PATTERNS = {
   
   system_focus_window: {
     patterns: [
-      /foca(?:r)?\s+(?:na\s+)?(?:janela\s+)?(.+)/i,
+      /^\s*foca(?:r)?\s+(?:na\s+)?(?:janela\s+)?(.+)/i,
       /alt\s*tab\s+(?:para\s+)?(.+)/i,
       /muda(?:r)?\s+(?:para\s+)?(?:a\s+)?janela\s+(.+)/i,
       /vai?\s+(?:para\s+)?(?:a\s+)?janela\s+(.+)/i
@@ -381,8 +386,10 @@ const INTENT_PATTERNS = {
   
   system_window_action: {
     patterns: [
-      /(?:minimiza|maximize|restaura|fecha)(?:r)?\s+(?:a\s+)?(?:janela\s+)?(.+)/i,
-      /(minimize|maximize|restore|close)\s+(?:window\s+)?(.+)/i
+      // Ancorados: "o que é que fecha uma ferida mais depressa" não é um
+      // pedido para fechar janelas nenhumas.
+      /^\s*(?:minimiza|maximize|restaura|fecha)(?:r)?\s+(?:a\s+)?(?:janela\s+)?(.+)/i,
+      /^\s*(minimize|maximize|restore|close)\s+(?:window\s+)?(.+)/i
     ],
     extract: (text) => {
       const actionMatch = text.match(/(minimiza|maximize|restaura|fecha|minimize|maximize|restore|close)/i);
@@ -447,8 +454,10 @@ const INTENT_PATTERNS = {
   
   input_key: {
     patterns: [
-      /(?:pressiona|press|carrega)\s+(?:a\s+)?(?:tecla\s+)?(\w+)(?:\s+(\d+)\s*(?:vezes|x))?/i,
-      /(?:tecla|key)\s+(\w+)/i
+      // Ancorados: "carrega" no meio de uma frase não é uma ordem para premir
+      // uma tecla no teclado de quem está a escrever.
+      /^\s*(?:pressiona|press|carrega)\s+(?:a\s+)?(?:tecla\s+)?(\w+)(?:\s+(\d+)\s*(?:vezes|x))?/i,
+      /^\s*(?:tecla|key)\s+(\w+)/i
     ],
     extract: (text) => {
       const match = text.match(/(?:pressiona|press|carrega|tecla|key)\s+(?:a\s+)?(?:tecla\s+)?(\w+)(?:\s+(\d+))?/i);
@@ -458,9 +467,12 @@ const INTENT_PATTERNS = {
   
   input_click: {
     patterns: [
-      /(?:click|clica|carrega)\s+(?:em\s+)?(?:\(?\s*(\d+)\s*,\s*(\d+)\s*\)?)?/i,
-      /(?:click|clica)\s+(?:botão\s+)?(esquerdo|direito|left|right)/i,
-      /(?:double\s*click|duplo\s*click|clica\s+duas?\s+vezes?)/i
+      // Ancorados: as coordenadas são opcionais, por isso a palavra "carrega"
+      // sozinha, em qualquer sítio da frase, bastava para mandar um clique
+      // para o rato de quem estava a escrever.
+      /^\s*(?:click|clica|carrega)\s+(?:em\s+)?(?:\(?\s*(\d+)\s*,\s*(\d+)\s*\)?)?/i,
+      /^\s*(?:click|clica)\s+(?:botão\s+)?(esquerdo|direito|left|right)/i,
+      /^\s*(?:double\s*click|duplo\s*click|clica\s+duas?\s+vezes?)/i
     ],
     extract: (text) => {
       const posMatch = text.match(/(\d+)\s*,\s*(\d+)/);
@@ -1269,6 +1281,64 @@ const INTENT_PATTERNS = {
 /**
  * Analisa mensagem e retorna intenção (regex rápido)
  */
+/**
+ * As intenções que mexem mesmo na máquina de quem está do outro lado.
+ *
+ * Estas não se activam por engano. Medido, e assustou: a mensagem "escreve um
+ * guia sobre picadas de abelha (...) termina obrigatoriamente com a frase
+ * FIM DO GUIA" casou com system_kill_process, porque o padrão é
+ * /(?:mata|termina|fecha|kill)r?\s+(.+)/ sem âncora nenhuma. O NEXO escreveu
+ * "💀 Terminando processo: picadas de abelha, com tabelas de medicacao (...)"
+ * e tentou matá-lo. Não existia nenhum processo com esse nome, e foi só por
+ * isso que não aconteceu nada.
+ */
+const INTENCOES_QUE_MEXEM = new Set([
+  'system_kill_process',
+  'system_execute',
+  'system_run_script',
+  'system_create_file',
+  'system_edit_file',
+  'system_open_app',
+  'system_open_url',
+  'system_focus_window',
+  'system_window_action',
+  'input_type',
+  'input_click',
+  'input_shortcut',
+  'input_key',
+  'input_scroll',
+  'input_move',
+  'input_paste',
+  'remote_execute',
+  'delete_task',
+  'delete_skill',
+  'delete_monitor',
+  'delete_workflow',
+  'forget'
+]);
+
+/** Acima disto já não é uma ordem, é um pedido escrito. */
+const MAX_PALAVRAS_DE_COMANDO = 12;
+
+/**
+ * A mensagem é uma ordem, ou é um texto que contém uma palavra de ordem?
+ *
+ * Uma ordem é curta e é uma frase só: "mata o processo chrome", "abre a pasta
+ * dos documentos". Um parágrafo com pontuação a meio é outra coisa, e o que
+ * lá estiver escrito não se executa.
+ */
+function pareceComando(texto) {
+  const limpo = String(texto || '').trim();
+  if (!limpo) return false;
+
+  if (limpo.split(/\s+/).length > MAX_PALAVRAS_DE_COMANDO) return false;
+
+  // Pontuação de fim de frase seguida de mais texto: são duas frases.
+  if (/[.!?;]\s+\S/.test(limpo)) return false;
+
+  return true;
+}
+
 function parseIntent(message) {
   if (!message || typeof message !== 'string') {
     return { intent: 'chat', entities: {} };
@@ -1327,6 +1397,10 @@ function parseIntent(message) {
   
   // Verificar cada padrão de intenção
   for (const [intent, config] of Object.entries(INTENT_PATTERNS)) {
+    // Uma ordem que mexe na máquina tem de ser uma ordem, não uma frase que
+    // por acaso tem a palavra lá dentro. Ver pareceComando().
+    if (INTENCOES_QUE_MEXEM.has(intent) && !pareceComando(text)) continue;
+
     for (const pattern of config.patterns) {
       if (pattern.test(text)) {
         return {

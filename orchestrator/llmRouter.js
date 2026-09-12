@@ -962,6 +962,7 @@ async function streamOpenAICompatible(provider, providerId, apiKey, messages, on
 
   let fullText = '';
   let usage = null;
+  let razaoDoFim = null;
   const porChamar = new Map(); // índice → chamada de ferramenta em construção
 
   try {
@@ -1010,6 +1011,13 @@ async function streamOpenAICompatible(provider, providerId, apiKey, messages, on
           // Com stream_options.include_usage, o último chunk traz as contagens.
           if (json.usage) usage = json.usage;
 
+          // Porque é que o modelo parou. 'length' significa que ficou sem
+          // espaço, e a resposta foi cortada a meio de uma frase. Sem isto,
+          // uma resposta truncada chegava ao ecrã com o aspecto de estar
+          // completa e ninguém percebia que faltava metade.
+          const porque = json.choices?.[0]?.finish_reason;
+          if (porque) razaoDoFim = porque;
+
           const delta = json.choices?.[0]?.delta;
           if (!delta) continue;
 
@@ -1047,6 +1055,9 @@ async function streamOpenAICompatible(provider, providerId, apiKey, messages, on
     provider: provider.name,
     model: opts.model,
     tokens: usage,
+    // Ficou sem espaço a meio da frase.
+    cortado: razaoDoFim === 'length',
+    razaoDoFim,
     toolCalls,
     // O turno do assistente tal como veio, para o ciclo de ferramentas o
     // poder devolver ao modelo sem ele perder o fio.
