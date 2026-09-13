@@ -4567,6 +4567,355 @@ describe('🪟 PowerShell: repetir só quando nem chegou a arrancar', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════
+// FASE 2: ALTERAÇÕES GERADAS, SÓ COM UM "SIM"
+// ═══════════════════════════════════════════════════════════
+
+describe('✋ Alterações geradas: só a lista, e com o alvo escrito no comando', () => {
+  const regras = require('../agents/regrasComandos');
+  const alteracoes = require('../agents/regrasAlteracoes');
+  const { PROTEGIDOS } = require('../agents/desempenhoAgent');
+
+  const casa = 'C:\\Users\\teste';
+  const ctx = {
+    raizes: [`${casa}\\Desktop`, `${casa}\\Documents`, `${casa}\\Downloads`],
+    ambiente: { USERPROFILE: casa, SystemRoot: 'C:\\Windows' },
+    protegidos: PROTEGIDOS
+  };
+  const p = (nome, valor, extra = {}) => ({ nome, tipo: 'StringConstantExpressionAst', valor, valores: [], texto: `'${valor}'`, ...extra });
+  const cmd = (resolvido, parametros = [], extra = {}) => ({
+    nome: resolvido, resolvido, tipo: 'Cmdlet', doSistema: true, invocacao: 'Unknown', simulavel: true, posicao: 0,
+    elementos: parametros.map(x => ({ tipo: 'CommandParameterAst', parametro: x.nome })), parametros, ...extra
+  });
+  const arvore = (comandos, extra = {}) => ({ errosSintaxe: [], comandos, metodos: [], atribuicoesPerigosas: [], unidades: [], redireccoes: [], textos: [], conversoes: [], estruturas: [], funcoes: [], ...extra });
+  const decidir = (comandos, extra) => regras.classificar(arvore(comandos, extra), ctx);
+  const TEMA = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize';
+
+  test('o tema escuro no registo do utilizador passa, com o que muda escrito', () => {
+    const r = decidir([cmd('Set-ItemProperty', [p('Path', TEMA), p('Name', 'AppsUseLightTheme'), { ...p('Value', 0), tipo: 'ConstantExpressionAst' }])]);
+    assertEqual(r.classe, 'alteracao', r.motivos.join('; '));
+    assertIncludes(r.alteracoes[0].resumo, 'AppsUseLightTheme');
+    assertIncludes(r.alteracoes[0].resumo, 'para 0');
+  });
+
+  test('o registo da máquina e as zonas que arrancam programas ficam de fora', () => {
+    for (const chave of ['HKLM:\\SOFTWARE\\x', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run',
+      'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce', 'HKCU:\\Environment',
+      'Registry::HKEY_CURRENT_USER\\Software\\Policies\\x', 'HKCU:\\Software\\Classes\\exefile\\shell']) {
+      const r = decidir([cmd('Set-ItemProperty', [p('Path', chave), p('Name', 'x'), p('Value', '1')])]);
+      assertEqual(r.classe, 'recusado', `deixou passar ${chave}`);
+    }
+  });
+
+  test('um alvo que só se sabe a correr não pede "sim", porque não se pode mostrar', () => {
+    const r = decidir([cmd('Set-ItemProperty', [{ nome: 'Path', tipo: 'VariableExpressionAst', valor: null, valores: [], texto: '$p' }, p('Name', 'x'), p('Value', '1')])]);
+    assertEqual(r.classe, 'recusado');
+    assertIncludes(r.motivos.join(' '), 'escrito no comando');
+  });
+
+  test('o alvo pela pipeline também não', () => {
+    const r = decidir([cmd('Get-ChildItem', [p('Path', `${casa}\\Downloads`)], { simulavel: false }), cmd('Move-Item', [p('Destination', `${casa}\\Documents`)], { posicao: 1 })]);
+    assertEqual(r.classe, 'recusado');
+  });
+
+  test('ficheiros: dentro das pastas pessoais sim, fora, com ".." ou ao lado não', () => {
+    const mover = (origem, destino) => decidir([cmd('Move-Item', [p('Path', origem), p('Destination', destino)])]).classe;
+    assertEqual(mover(`${casa}\\Downloads\\*.pdf`, `${casa}\\Documents`), 'alteracao');
+    assertEqual(mover(`${casa}\\Downloads\\*.pdf`, 'C:\\Windows'), 'recusado');
+    assertEqual(mover('C:\\Windows\\win.ini', `${casa}\\Desktop`), 'recusado');
+    assertEqual(mover(`${casa}\\Documents`, `${casa}\\Desktop`), 'recusado');
+    assertEqual(mover(`${casa}\\Desktop\\..\\AppData\\x`, `${casa}\\Desktop`), 'recusado');
+    assertEqual(mover(`${casa}\\Downloads*`, `${casa}\\Desktop`), 'recusado');
+    assertEqual(mover('Downloads\\a.pdf', `${casa}\\Desktop`), 'recusado');
+  });
+
+  test('apagar e sobrescrever ficam de fora', () => {
+    assertEqual(decidir([cmd('Remove-Item', [p('Path', `${casa}\\Desktop\\a.txt`)])]).classe, 'recusado');
+    const forcado = decidir([cmd('Copy-Item', [p('Path', `${casa}\\Desktop\\a.txt`), p('Destination', `${casa}\\Documents`), { nome: 'Force', tipo: 'interruptor', valor: null, valores: [] }])]);
+    assertEqual(forcado.classe, 'recusado');
+  });
+
+  test('fechar: só pelo nome, sem curingas, nunca o Windows nem o NEXO, e avisa que se perde o que não foi guardado', () => {
+    const fechar = (nome) => decidir([cmd('Stop-Process', [p('Name', nome)])]);
+    const bom = fechar('notepad');
+    assertEqual(bom.classe, 'alteracao');
+    assert(bom.alteracoes[0].irreversivel, 'fechar à força tem de avisar');
+    assertEqual(fechar('explorer').classe, 'recusado');
+    assertEqual(fechar('node').classe, 'recusado');
+    assertEqual(fechar('chr*').classe, 'recusado');
+  });
+
+  test('abrir: sites e programas sim, interpretadores, scripts e protocolos estranhos não', () => {
+    const abrir = (alvo, extra = []) => decidir([cmd('Start-Process', [p('FilePath', alvo), ...extra], { simulavel: false })], { textos: [alvo] }).classe;
+    assertEqual(abrir('https://www.publico.pt'), 'alteracao');
+    assertEqual(abrir('notepad'), 'alteracao');
+    assertEqual(abrir('ms-settings:display'), 'alteracao');
+    assertEqual(abrir('powershell'), 'recusado');
+    assertEqual(abrir('C:\\Users\\teste\\Downloads\\x.ps1'), 'recusado');
+    assertEqual(abrir('search-ms:query=x'), 'recusado');
+    assertEqual(abrir('file://servidor/x'), 'recusado');
+    assertEqual(abrir('chrome', [p('ArgumentList', '--remote-debugging-port=9222')]), 'recusado');
+    assertEqual(abrir('notepad', [p('Verb', 'RunAs')]), 'recusado');
+  });
+
+  test('programas do Windows: só os argumentos exactos, e o do System32', () => {
+    const programa = (nome, args, caminho = `C:\\Windows\\system32\\${nome}.exe`) => decidir([{
+      nome, resolvido: `${nome}.exe`, tipo: 'Application', doSistema: true, invocacao: 'Unknown', caminhoDoPrograma: caminho, posicao: 0,
+      elementos: args.map(() => ({ tipo: 'StringConstantExpressionAst' })),
+      parametros: args.map((a, i) => ({ nome: String(i), tipo: 'StringConstantExpressionAst', valor: a, valores: [] }))
+    }]).classe;
+    assertEqual(programa('shutdown', ['/s', '/t', '3600']), 'alteracao');
+    assertEqual(programa('shutdown', ['/a']), 'alteracao');
+    assertEqual(programa('shutdown', ['/s', '/t', '0']), 'recusado');
+    assertEqual(programa('shutdown', ['/s', '/f', '/t', '60']), 'recusado');
+    assertEqual(programa('rundll32', ['user32.dll,LockWorkStation']), 'alteracao');
+    assertEqual(programa('rundll32', ['shell32.dll,Control_RunDLL']), 'recusado');
+    assertEqual(programa('shutdown', ['/a'], 'C:\\Users\\teste\\shutdown.exe'), 'recusado');
+    assertEqual(programa('cmd', ['/c', 'del', 'x']), 'recusado');
+  });
+
+  test('no modo de leitura, as mesmas alterações continuam a não correr', () => {
+    const r = regras.classificar(arvore([cmd('Set-ItemProperty', [p('Path', TEMA), p('Name', 'x'), p('Value', '1')])]));
+    assertEqual(r.classe, 'muda');
+  });
+
+  test('$env: resolve-se com o ambiente do comando; outra variável não', () => {
+    const texto = (t) => ({ nome: 'Path', tipo: 'ExpandableStringExpressionAst', valor: null, valores: [], texto: t });
+    assertEqual(alteracoes.valoresDe(texto('"$env:USERPROFILE\\Desktop"'), ctx.ambiente)[0], `${casa}\\Desktop`);
+    assertEqual(alteracoes.valoresDe(texto('"$pasta\\Desktop"'), ctx.ambiente), null);
+    assertEqual(alteracoes.valoresDe(texto('"$(Get-Date)\\x"'), ctx.ambiente), null);
+    assertEqual(alteracoes.valoresDe(texto('"$env:NAO_EXISTE\\x"'), ctx.ambiente), null);
+  });
+
+  test('o PowerShell a sério: o bloqueio do PC com vírgula e o brilho passam', async () => {
+    const real = { raizes: [`${process.env.USERPROFILE}\\Desktop`], ambiente: process.env, protegidos: PROTEGIDOS };
+    for (const c of [
+      'rundll32.exe user32.dll,LockWorkStation',
+      'Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorBrightnessMethods | Invoke-CimMethod -MethodName WmiSetBrightness -Arguments @{ Brightness = 60; Timeout = 0 }',
+      `Set-ItemProperty '${TEMA}' AppsUseLightTheme 0`
+    ]) {
+      const r = await regras.verificar(c, real);
+      assertEqual(r.classe, 'alteracao', `${c} → ${(r.motivos || []).join('; ')}`);
+    }
+  });
+
+  test('o PowerShell a sério: o que nunca passa', async () => {
+    const real = { raizes: [`${process.env.USERPROFILE}\\Desktop`], ambiente: process.env, protegidos: PROTEGIDOS };
+    for (const c of [
+      'Set-MpPreference -DisableRealtimeMonitoring $true',
+      'Stop-Service wuauserv',
+      "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'calc' }",
+      "foreach ($n in 'a','b') { New-Item -ItemType Directory -Path \"$env:USERPROFILE\\Desktop\\$n\" }",
+      'Get-Process chrome | Stop-Process',
+      "Start-Process powershell -ArgumentList '-c Remove-Item x'"
+    ]) {
+      const r = await regras.verificar(c, real);
+      assertEqual(r.classe, 'recusado', `deixou passar: ${c}`);
+    }
+  });
+});
+
+describe('🔁 Preparar, simular, confirmar e verificar (numa pasta descartável)', () => {
+  const fs = require('fs');
+  const comandosAgent = require('../agents/comandosAgent');
+  const accoesPendentes = require('../orchestrator/accoesPendentes');
+  const tools = require('../orchestrator/tools');
+  const toolLoop = require('../orchestrator/toolLoop');
+
+  function terreno(pasta) {
+    const pessoal = path.join(pasta, 'Pessoal');
+    fs.mkdirSync(path.join(pessoal, 'Origem'), { recursive: true });
+    fs.mkdirSync(path.join(pessoal, 'Destino'), { recursive: true });
+    for (const f of ['a.pdf', 'b.pdf', 'c.txt']) fs.writeFileSync(path.join(pessoal, 'Origem', f), 'x');
+    return pessoal;
+  }
+
+  test('nada muda antes do "sim"; depois muda, e a verificação mostra a diferença', async () => {
+    await comPastaDeDados(async (pasta) => {
+      const pessoal = terreno(pasta);
+      const p = await comandosAgent.prepararAlteracao({
+        tarefa: 'mover os pdf',
+        explicacao: 'Os PDF passam para a pasta Destino.',
+        comando: `Move-Item -Path '${pessoal}\\Origem\\*.pdf' -Destination '${pessoal}\\Destino'`,
+        verificacao: `(Get-ChildItem '${pessoal}\\Destino' -Filter *.pdf).Count`,
+        desfazer: `Move-Item -Path '${pessoal}\\Destino\\*.pdf' -Destination '${pessoal}\\Origem'`
+      }, { raizes: [pessoal] });
+
+      assert(p.success, p.error);
+      assertIncludes(p.descricao, '```powershell');
+      assertIncludes(p.descricao, 'mover ficheiro:');
+      assertIncludes(p.descricao, 'Para desfazer');
+      assertEqual(fs.readdirSync(path.join(pessoal, 'Destino')).length, 0, 'mudou antes do "sim"');
+
+      const r = await p.executar();
+      assert(r.success, r.message);
+      assertIncludes(r.message, 'antes: `0`');
+      assertIncludes(r.message, 'depois: `2`');
+      assertEqual(fs.readdirSync(path.join(pessoal, 'Destino')).length, 2);
+
+      const aprendido = comandosAgent.lerMemoria().resultaram[0];
+      assertEqual(aprendido.tipo, 'alteracao');
+      assertIncludes(aprendido.desfazer, 'Move-Item');
+      assertIncludes(comandosAgent.notasPara('desfaz a última alteração'), 'para desfazer');
+    });
+  });
+
+  test('a simulação trava um comando que falharia, antes de pedir o "sim"', async () => {
+    await comPastaDeDados(async (pasta) => {
+      const pessoal = terreno(pasta);
+      const p = await comandosAgent.prepararAlteracao({
+        tarefa: 'renomear', explicacao: 'x',
+        comando: `Rename-Item -Path '${pessoal}\\nao-existe.txt' -NewName 'y.txt'`,
+        verificacao: `Test-Path '${pessoal}\\y.txt'`
+      }, { raizes: [pessoal] });
+      assertEqual(p.success, false);
+      assertIncludes(p.error, 'simulação');
+    });
+  });
+
+  test('uma verificação que muda alguma coisa é recusada, e não corre', async () => {
+    await comPastaDeDados(async (pasta) => {
+      const pessoal = terreno(pasta);
+      const p = await comandosAgent.prepararAlteracao({
+        tarefa: 'criar pasta', explicacao: 'x',
+        comando: `New-Item -ItemType Directory -Path '${pessoal}\\Nova'`,
+        verificacao: `Remove-Item '${pessoal}\\Origem\\c.txt'`
+      }, { raizes: [pessoal] });
+      assertEqual(p.success, false);
+      assert(fs.existsSync(path.join(pessoal, 'Origem', 'c.txt')), 'a verificação correu');
+      assert(!fs.existsSync(path.join(pessoal, 'Nova')), 'a alteração correu');
+    });
+  });
+
+  test('apagar: só o que o NEXO criou, e só vazio, mesmo que se encha entre a proposta e o "sim"', async () => {
+    await comPastaDeDados(async (pasta) => {
+      const pessoal = terreno(pasta);
+      const nova = path.join(pessoal, 'Nova');
+
+      const doUtilizador = await comandosAgent.prepararAlteracao({ tarefa: 'apagar', explicacao: 'x', comando: `Remove-Item -Path '${pessoal}\\Origem\\c.txt'`, verificacao: 'Get-Date' }, { raizes: [pessoal] });
+      assertEqual(doUtilizador.success, false);
+      assertIncludes(doUtilizador.error, 'não foi criado pelo NEXO');
+
+      const criar = await comandosAgent.prepararAlteracao({ tarefa: 'criar pasta', explicacao: 'x', comando: `New-Item -ItemType Directory -Path '${nova}'`, verificacao: `Test-Path '${nova}'`, desfazer: `Remove-Item -Path '${nova}'` }, { raizes: [pessoal] });
+      assert(criar.success, criar.error);
+      assertIncludes(criar.descricao, 'Para desfazer', 'o desfazer de uma criação ficou de fora');
+      assert((await criar.executar()).success);
+
+      const apagar = await comandosAgent.prepararAlteracao({ tarefa: 'desfazer', explicacao: 'x', comando: `Remove-Item -Path '${nova}'`, verificacao: `Test-Path '${nova}'` }, { raizes: [pessoal] });
+      assert(apagar.success, apagar.error);
+
+      // Entre a proposta e o "sim", o utilizador guardou lá um ficheiro.
+      fs.writeFileSync(path.join(nova, 'importante.txt'), 'meu');
+      const r = await apagar.executar();
+      assertEqual(r.success, false);
+      assertIncludes(r.message, 'não está vazia');
+      assert(fs.existsSync(path.join(nova, 'importante.txt')), 'o ficheiro do utilizador desapareceu');
+
+      const comRecurse = await comandosAgent.prepararAlteracao({ tarefa: 'apagar', explicacao: 'x', comando: `Remove-Item -Path '${nova}' -Recurse`, verificacao: 'Get-Date' }, { raizes: [pessoal] });
+      assertEqual(comRecurse.success, false);
+    });
+  });
+
+  test('a acção pendente mostra o comando e não traz a frase da revisão', async () => {
+    accoesPendentes.limparTudo();
+    const proposta = accoesPendentes.propor('teste-alteracao', {
+      titulo: 't', descricao: 'BLOCO', instrucao: 'MOSTRA TAL COMO ESTÁ', rodape: '', executar: async () => ({ success: true, message: 'feito' })
+    });
+    assertIncludes(proposta.texto, 'MOSTRA TAL COMO ESTÁ');
+    const r = await accoesPendentes.confirmar('teste-alteracao');
+    assertEqual(r, 'feito');
+
+    accoesPendentes.propor('teste-alteracao', { titulo: 't', descricao: 'd', executar: async () => ({ success: true, message: 'feito' }) });
+    assertIncludes(await accoesPendentes.confirmar('teste-alteracao'), 'próxima sugestão');
+  });
+
+  test('as linhas da simulação chegam em português', () => {
+    const linhas = comandosAgent.linhasDaSimulacao('What if: Performing the operation "Set Property" on target "Item: HKEY_CURRENT_USER\\X Property: Tema".');
+    assertEqual(linhas[0], 'mudar valor: Tema em HKEY_CURRENT_USER\\X');
+  });
+
+  test('"põe o windows em modo escuro" leva a ferramenta de alterações, que só prepara', () => {
+    assert(tools.seleccionar('põe o windows em modo escuro').some(f => f.nome === 'preparar_alteracao_pc'));
+    assertEqual(tools.porNome('preparar_alteracao_pc').risco, 'ler');
+  });
+
+  test('sem saber a quem perguntar, não prepara nada', async () => {
+    const r = await tools.porNome('preparar_alteracao_pc').executar({ tarefa: 'x', explicacao: 'x', comando: 'Stop-Process -Name notepad', verificacao: 'Get-Date' }, {});
+    assertIncludes(r, 'NÃO FOI PREPARADA');
+  });
+
+  test('o modelo sabe que tem de dar verificação e mostrar o comando', () => {
+    assertIncludes(toolLoop.SISTEMA, 'comando de verificação');
+    assertIncludes(toolLoop.SISTEMA, 'com o comando, e pergunta se confirma');
+    assertIncludes(toolLoop.SISTEMA, 'Nunca escrevas tu uma proposta');
+  });
+
+  test('"cria no registo a chave X" traz a ferramenta de alterações', () => {
+    // Medido: sem ela no menu, o modelo escreveu uma proposta em texto.
+    assert(tools.seleccionar('cria no registo a chave HKCU:\\Software\\X com um valor Modo').some(f => f.nome === 'preparar_alteracao_pc'));
+  });
+
+  test('a alteração preparada vai para o ecrã tal como o código a escreveu, sem outra volta pelo modelo', async () => {
+    const llmRouter = require('../orchestrator/llmRouter');
+    const original = llmRouter.chatStream;
+    const alvo = path.join(require('os').homedir(), 'Documents', `NEXO-teste-nunca-criado-${process.pid}`);
+    let voltas = 0;
+    llmRouter.chatStream = async (m, onToken, onDone) => {
+      voltas++;
+      if (voltas > 1) { onToken('RESUMO DO MODELO'); return onDone('RESUMO DO MODELO', { provider: 'Falso' }); }
+      const chamada = { id: 'c1', type: 'function', function: { name: 'preparar_alteracao_pc', arguments: JSON.stringify({
+        tarefa: 'criar pasta de teste', explicacao: 'Cria uma pasta de teste.',
+        comando: `New-Item -ItemType Directory -Path '${alvo}'`, verificacao: `Test-Path '${alvo}'`
+      }) } };
+      onDone('', { provider: 'Falso', toolCalls: [chamada], raw: { role: 'assistant', content: null, tool_calls: [chamada] } });
+    };
+    accoesPendentes.limparTudo();
+    try {
+      await comPastaDeDados(async () => {
+        let escrito = '';
+        const r = await toolLoop.correrComStream('cria uma pasta de teste', { userId: 'teste-directo' }, { onToken: (t) => { escrito += t; } });
+        assertEqual(voltas, 1, 'o modelo foi chamado outra vez para resumir');
+        assert(r.respostaDirecta);
+        assertIncludes(escrito, '```powershell');
+        assertIncludes(escrito, 'criar pasta:');
+        assertIncludes(escrito, 'Confirmas?');
+        assert(!escrito.includes('RESUMO DO MODELO'));
+        assert(!escrito.includes('ACÇÃO PREPARADA'), 'o cabeçalho para o modelo apareceu ao utilizador');
+        assert(accoesPendentes.tem('teste-directo'), 'ficou sem nada à espera do "sim"');
+        assert(!require('fs').existsSync(alvo), 'a pasta foi criada sem "sim"');
+      });
+    } finally {
+      llmRouter.chatStream = original;
+      accoesPendentes.limparTudo();
+      require('fs').rmSync(alvo, { recursive: true, force: true });
+    }
+  });
+
+  test('uma proposta inventada pelo modelo leva um aviso de que nada está à espera', async () => {
+    const llmRouter = require('../orchestrator/llmRouter');
+    const original = llmRouter.chatStream;
+    const inventada = 'ACÇÃO PREPARADA, AINDA NÃO FEITA: apagar a pasta. Responde **sim** para avançar ou **não** para cancelar.';
+    llmRouter.chatStream = async (m, onToken, onDone) => { onToken(inventada); onDone(inventada, { provider: 'Falso' }); };
+    accoesPendentes.limparTudo();
+    try {
+      let escrito = '';
+      const r = await toolLoop.correrComStream('apaga a pasta x', { userId: 'teste-inventada' }, { onToken: (t) => { escrito += t; } });
+      assertIncludes(r.texto, 'Ainda não preparei nada');
+      assertIncludes(escrito, 'Ainda não preparei nada');
+    } finally {
+      llmRouter.chatStream = original;
+    }
+  });
+
+  test('com uma acção mesmo à espera, o pedido de "sim" não leva aviso', () => {
+    accoesPendentes.limparTudo();
+    accoesPendentes.propor('teste-real', { titulo: 't', descricao: 'd', executar: async () => ({}) });
+    assertEqual(toolLoop.avisoSeNadaPreparado('Confirmas? Responde sim para avançar.', { userId: 'teste-real' }), '');
+    assertEqual(toolLoop.avisoSeNadaPreparado('Olá, tudo bem?', { userId: 'outro' }), '');
+    accoesPendentes.limparTudo();
+  });
+});
+
 Promise.all(pendentes).then(() => {
   console.log('\n' + '═'.repeat(55));
   console.log(`\n🧪 RESULTADO: ${passed}/${totalTests} testes passaram`);

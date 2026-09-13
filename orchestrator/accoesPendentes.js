@@ -44,7 +44,19 @@ function tem(userId) {
  * @returns {Object} { ok, texto } — o texto é para o modelo, e diz-lhe o que
  *   fazer a seguir: explicar e perguntar, sem dar a acção por feita.
  */
-function propor(userId, { titulo, descricao, executar }) {
+const INSTRUCAO_PADRAO = 'Explica isto ao utilizador em linguagem simples e pergunta se confirma. ' +
+  'Ele responde "sim" para avançar ou "não" para cancelar. ' +
+  'Não digas que já foi feito, e não prepares outra acção antes de ele responder.';
+
+const RODAPE_PADRAO = '_Se quiseres, continuo com a próxima sugestão da revisão._';
+
+/**
+ * @param {Object} accao
+ * @param {string} [accao.instrucao]  o que o modelo deve fazer com a descrição
+ *   (as alterações por comando pedem que o comando seja mostrado tal como está)
+ * @param {string} [accao.rodape]  o que vem depois do resultado; '' para nada
+ */
+function propor(userId, { titulo, descricao, executar, instrucao, rodape }) {
   const existente = obter(userId);
   if (existente) {
     return {
@@ -55,13 +67,10 @@ function propor(userId, { titulo, descricao, executar }) {
     };
   }
 
-  pendentes.set(userId, { titulo, descricao, executar, criada: Date.now() });
+  pendentes.set(userId, { titulo, descricao, executar, rodape, criada: Date.now() });
   return {
     ok: true,
-    texto: `ACÇÃO PREPARADA, AINDA NÃO FEITA: ${descricao}\n\n` +
-      'Explica isto ao utilizador em linguagem simples e pergunta se confirma. ' +
-      'Ele responde "sim" para avançar ou "não" para cancelar. ' +
-      'Não digas que já foi feito, e não prepares outra acção antes de ele responder.'
+    texto: `ACÇÃO PREPARADA, AINDA NÃO FEITA: ${descricao}\n\n${instrucao || INSTRUCAO_PADRAO}`
   };
 }
 
@@ -74,7 +83,8 @@ async function confirmar(userId) {
   try {
     const r = await accao.executar();
     const texto = r?.message || (r?.success ? '✅ Feito.' : '❌ Não consegui fazer isso.');
-    return `${texto}\n\n_Se quiseres, continuo com a próxima sugestão da revisão._`;
+    const rodape = accao.rodape === undefined ? RODAPE_PADRAO : accao.rodape;
+    return rodape ? `${texto}\n\n${rodape}` : texto;
   } catch (e) {
     return `❌ ${accao.titulo} falhou: ${e.message}. Não ficou nada a meio: podes pedir outra vez.`;
   }

@@ -17,8 +17,13 @@
 
 const llmRouter = require('./llmRouter');
 const tools = require('./tools');
+const accoesPendentes = require('./accoesPendentes');
 
-const MAX_PASSOS = parseInt(process.env.TOOLS_MAX_STEPS) || 4;
+// Eram 4. Medido: preparar uma alteração que as regras recusam, ler o estado
+// actual e voltar a preparar já gasta três, e o quarto acabava a mandar o
+// utilizador correr o comando à mão. Os passos só se gastam quando são
+// precisos; uma pergunta simples continua a usar um ou dois.
+const MAX_PASSOS = parseInt(process.env.TOOLS_MAX_STEPS) || 6;
 const ACTIVO = process.env.TOOLS_ENABLED !== '0';
 
 /**
@@ -58,6 +63,20 @@ escreve tu um comando PowerShell só de leitura e corre-o. Se um comando que já
 resultou neste PC servir, reutiliza-o. Se as regras recusarem um comando, não
 tentes contorná-las: escreve outro que só leia, ou diz o que não foi possível.
 
+Para mudar algo no PC que as outras acções não cobrem, prepara a alteração com
+um comando teu, sempre com um comando de verificação que só leia e, se houver,
+o comando para desfazer. Se não souberes um caminho ou um valor actual, lê-o
+primeiro. Quando a alteração ficar preparada, mostra ao utilizador o que
+receberes tal como está, com o comando, e pergunta se confirma.
+
+Nunca escrevas tu uma proposta com "sim/não" nem digas que uma acção está
+preparada sem a teres preparado com uma ferramenta: o "sim" do utilizador só
+executa o que ficou preparado. Apagar ficheiros, pastas ou chaves do utilizador
+não é possível por aqui; se to pedirem, diz isso com franqueza. Só se apaga o
+que o próprio NEXO criou, para desfazer (Remove-Item, sem -Recurse nem -Force). Não mandes o utilizador correr
+comandos ele próprio: quem pede ao NEXO quer que o NEXO faça. Se as regras
+recusarem, lê o motivo, corrige o comando e prepara outra vez.
+
 Depois de receberes o resultado de uma ferramenta, responde ao utilizador em
 português europeu, de forma directa e curta. Não descrevas os passos que deste
 nem menciones nomes de ferramentas.`;
@@ -69,6 +88,24 @@ nem menciones nomes de ferramentas.`;
 function textoRecente(historico) {
   if (!Array.isArray(historico)) return '';
   return historico.slice(-4).map(m => String(m?.content || '').slice(0, 4000)).join(' ');
+}
+
+/**
+ * Uma resposta que pede um "sim" sem nada à espera de o receber.
+ *
+ * Medido: pedido para apagar uma pasta, o modelo escreveu o comando, o
+ * cabeçalho "ACÇÃO PREPARADA, AINDA NÃO FEITA" copiado de uma resposta
+ * anterior e "responde sim para avançar", sem ter chamado ferramenta nenhuma.
+ * O utilizador ficaria convencido de que um "sim" fazia alguma coisa.
+ */
+const PEDE_SIM = /AINDA NÃO FEITA|respond[ea]\s+\**\s*["«]?sim["»]?\s*\**\s+para|\(\s*sim\s*\/\s*não\s*\)|confirmas a execução|deseja prosseguir|pretende executar/i;
+
+const AVISO_SEM_ACCAO = '\n\n_(Ainda não preparei nada: se disseres "sim", preparo a alteração e mostro-ta antes de a fazer.)_';
+
+function avisoSeNadaPreparado(texto, contexto) {
+  if (!PEDE_SIM.test(String(texto || ''))) return '';
+  if (contexto?.userId && accoesPendentes.tem(contexto.userId)) return '';
+  return AVISO_SEM_ACCAO;
 }
 
 /**
@@ -119,6 +156,8 @@ async function correr(mensagem, contexto = {}) {
   mensagens.push({ role: 'user', content: mensagem });
 
   const usadas = [];
+  const saidaDirecta = {};
+  const contextoDasFerramentas = { ...contexto, saidaDirecta };
 
   for (let passo = 1; passo <= MAX_PASSOS; passo++) {
     const resposta = await llmRouter.chat(mensagens, {
@@ -138,7 +177,7 @@ async function correr(mensagem, contexto = {}) {
     if (!chamadas || !chamadas.length) {
       const texto = (resposta.text || '').trim();
       if (!texto) return null;
-      return { texto, ferramentasUsadas: usadas, passos: passo, provider: resposta.provider };
+      return { texto: texto + avisoSeNadaPreparado(texto, contexto), ferramentasUsadas: usadas, passos: passo, provider: resposta.provider };
     }
 
     // Guardar o turno do assistente tal como veio, senão o modelo perde o fio.
@@ -152,7 +191,7 @@ async function correr(mensagem, contexto = {}) {
 
       const resultado = argumentos.__erroDeFormato
         ? `❌ Argumentos inválidos. Envia JSON válido para ${nome}.`
-        : await tools.executar(nome, argumentos, contexto);
+        : await tools.executar(nome, argumentos, contextoDasFerramentas);
 
       usadas.push(nome);
 
@@ -162,6 +201,11 @@ async function correr(mensagem, contexto = {}) {
         name: nome,
         content: String(resultado).slice(0, 4000)
       });
+    }
+
+    // Uma ferramenta quis responder ela própria (uma alteração preparada).
+    if (saidaDirecta.texto) {
+      return { texto: saidaDirecta.texto, ferramentasUsadas: usadas, passos: passo, respostaDirecta: true };
     }
   }
 
@@ -221,6 +265,8 @@ async function correrComStream(mensagem, contexto = {}, saidas = {}) {
   const usadas = [];
   let escrito = '';
   let fornecedor = null;
+  const saidaDirecta = {};
+  const contextoDasFerramentas = { ...contexto, saidaDirecta };
 
   for (let passo = 1; passo <= MAX_PASSOS; passo++) {
     const volta = await umaVolta(mensagens, esquemas, onToken, contexto);
@@ -264,6 +310,11 @@ async function correrComStream(mensagem, contexto = {}, saidas = {}) {
     // Sem chamadas, o modelo respondeu e o texto já foi para o ecrã. Fim.
     if (!chamadas || !chamadas.length) {
       if (!escrito.trim()) return null;
+      const aviso = avisoSeNadaPreparado(escrito, contexto);
+      if (aviso) {
+        onToken(aviso);
+        escrito += aviso;
+      }
       return {
         texto: escrito,
         ferramentasUsadas: usadas,
@@ -286,7 +337,7 @@ async function correrComStream(mensagem, contexto = {}, saidas = {}) {
 
       const resultado = argumentos.__erroDeFormato
         ? `❌ Argumentos inválidos. Envia JSON válido para ${nome}.`
-        : await tools.executar(nome, argumentos, contexto);
+        : await tools.executar(nome, argumentos, contextoDasFerramentas);
 
       usadas.push(nome);
 
@@ -296,6 +347,14 @@ async function correrComStream(mensagem, contexto = {}, saidas = {}) {
         name: nome,
         content: String(resultado).slice(0, 4000)
       });
+    }
+
+    // Uma ferramenta quis responder ela própria: uma alteração preparada vai
+    // para o ecrã tal como o código a escreveu, sem outra volta pelo modelo.
+    if (saidaDirecta.texto) {
+      const bloco = `${escrito.trim() ? '\n\n' : ''}${saidaDirecta.texto}`;
+      onToken(bloco);
+      return { texto: escrito + bloco, ferramentasUsadas: usadas, passos: passo, provider: fornecedor, respostaDirecta: true };
     }
   }
 
@@ -412,4 +471,4 @@ async function umaVolta(mensagens, esquemas, onToken, contexto) {
   return recolhido;
 }
 
-module.exports = { correr, correrComStream, emCru, MAX_PASSOS, ACTIVO, SISTEMA };
+module.exports = { correr, correrComStream, emCru, avisoSeNadaPreparado, MAX_PASSOS, ACTIVO, SISTEMA };

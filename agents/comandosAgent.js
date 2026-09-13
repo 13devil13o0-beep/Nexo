@@ -82,7 +82,13 @@ const SCRIPT_CORRER = String.raw`[Console]::OutputEncoding = [Text.Encoding]::UT
 $ProgressPreference = 'SilentlyContinue'
 $WarningPreference = 'SilentlyContinue'
 $codigoDoNexo = [string]$env:NEXO_COMANDO_A_CORRER
-Remove-Item Env:\NEXO_COMANDO_A_CORRER -ErrorAction SilentlyContinue
+$modoDoNexo = [string]$env:NEXO_MODO
+Remove-Item Env:\NEXO_COMANDO_A_CORRER, Env:\NEXO_MODO -ErrorAction SilentlyContinue
+# Simular: os comandos que o sabem fazer dizem o que fariam, e não fazem.
+if ($modoDoNexo -eq 'simular') { $WhatIfPreference = $true }
+# Confirmado pelo utilizador: o PowerShell não volta a perguntar (e sem
+# consola, perguntar era falhar).
+if ($modoDoNexo -eq 'confirmado') { $ConfirmPreference = 'None' }
 $errosDoNexo = New-Object System.Collections.ArrayList
 $dadosDoNexo = @()
 try {
@@ -99,17 +105,27 @@ $textoDoNexo = ($dadosDoNexo | Out-String -Width 200).Trim()
 '@@NEXO@@' + ([ordered]@{ saida = $textoDoNexo; erros = @($errosDoNexo | Select-Object -First 5); totalErros = $errosDoNexo.Count } | ConvertTo-Json -Compress)
 `;
 
-async function correrLeitura(script) {
+/**
+ * @param {string} script
+ * @param {{ modo?: 'ler'|'simular'|'confirmado', timeout?: number }} opcoes
+ * @returns {{ saida, erros, totalErros, anfitriao }} — `anfitriao` é o que o
+ *   PowerShell escreveu fora da pipeline, onde aparecem as linhas "What if:".
+ */
+async function correrComando(script, opcoes = {}) {
   const bruto = await powershell.correr(SCRIPT_CORRER, {
-    timeout: TEMPO_MAXIMO_MS,
+    timeout: opcoes.timeout || TEMPO_MAXIMO_MS,
     maxBuffer: 8 * 1024 * 1024,
-    env: { ...ambienteLimpo(), [VARIAVEL_DO_CODIGO]: String(script) }
+    env: { ...ambienteLimpo(), [VARIAVEL_DO_CODIGO]: String(script), NEXO_MODO: opcoes.modo || 'ler' }
   });
   const marca = bruto.lastIndexOf('@@NEXO@@');
   if (marca < 0) throw new Error('o comando não chegou ao fim');
   const r = JSON.parse(bruto.slice(marca + '@@NEXO@@'.length));
   const erros = Array.isArray(r.erros) ? r.erros : (r.erros ? [r.erros] : []);
-  return { saida: String(r.saida || ''), erros, totalErros: r.totalErros || 0 };
+  return { saida: String(r.saida || ''), erros, totalErros: r.totalErros || 0, anfitriao: bruto.slice(0, marca).trim() };
+}
+
+function correrLeitura(script) {
+  return correrComando(script, { modo: 'ler' });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -146,7 +162,11 @@ function chaveDoComando(script) {
   return String(script || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-function registarSucesso(tarefa, script, agora = new Date()) {
+/**
+ * @param {Object} [extra]  para as alterações: { tipo: 'alteracao', verificacao, desfazer }
+ */
+function registarSucesso(tarefa, script, extra = {}, agora = new Date()) {
+  if (extra instanceof Date) { agora = extra; extra = {}; }
   const memoria = lerMemoria();
   const chave = chaveDoComando(script);
   const quando = agora.toISOString();
@@ -156,8 +176,9 @@ function registarSucesso(tarefa, script, agora = new Date()) {
     entrada.vezes = (entrada.vezes || 0) + 1;
     entrada.ultimaVez = quando;
     if (tarefa && !entrada.tarefas?.includes(tarefa)) entrada.tarefas = [...(entrada.tarefas || []), tarefa].slice(-5);
+    Object.assign(entrada, limparExtra(extra));
   } else {
-    entrada = { tarefa, tarefas: [tarefa], script: String(script).trim(), vezes: 1, criadoEm: quando, ultimaVez: quando };
+    entrada = { tarefa, tarefas: [tarefa], script: String(script).trim(), vezes: 1, criadoEm: quando, ultimaVez: quando, ...limparExtra(extra) };
     memoria.resultaram.push(entrada);
   }
 
@@ -168,6 +189,14 @@ function registarSucesso(tarefa, script, agora = new Date()) {
   memoria.resultaram = memoria.resultaram.slice(0, MAX_APRENDIDOS);
   gravarMemoria(memoria);
   return entrada;
+}
+
+function limparExtra(extra = {}) {
+  const limpo = {};
+  if (extra.tipo) limpo.tipo = extra.tipo;
+  if (extra.verificacao) limpo.verificacao = String(extra.verificacao).trim();
+  if (extra.desfazer) limpo.desfazer = String(extra.desfazer).trim();
+  return limpo;
 }
 
 function registarFalha(tarefa, script, motivo, agora = new Date()) {
@@ -257,14 +286,41 @@ function notasPara(pedido) {
   const { resultaram, falharam } = semelhantes(pedido);
   if (resultaram.length) {
     linhas.push('Comandos que já resultaram neste PC em pedidos parecidos (reutiliza se servirem):');
-    for (const e of resultaram) linhas.push(`- "${e.tarefa}" (${e.vezes}x): ${e.script.slice(0, 500)}`);
+    for (const e of resultaram) {
+      if (e.tipo === 'alteracao') {
+        linhas.push(`- "${e.tarefa}" (${e.vezes}x, alteração): ${e.script.slice(0, 500)}` +
+          (e.verificacao ? ` | verificação: ${e.verificacao.slice(0, 200)}` : '') +
+          (e.desfazer ? ` | desfazer: ${e.desfazer.slice(0, 200)}` : ''));
+      } else {
+        linhas.push(`- "${e.tarefa}" (${e.vezes}x): ${e.script.slice(0, 500)}`);
+      }
+    }
   }
   if (falharam.length) {
     linhas.push('Tentativas que falharam em pedidos parecidos (não as repitas):');
     for (const e of falharam) linhas.push(`- ${e.script.slice(0, 300)} → ${e.motivo}`);
   }
 
+  // "Desfaz isso" não tem palavras do pedido original. As últimas alterações
+  // vão com o comando de desfazer que o próprio NEXO propôs na altura.
+  if (PEDE_PARA_DESFAZER.test(normalizarTexto(pedido))) {
+    const recentes = lerHistorico().slice(-3).reverse();
+    if (recentes.length) {
+      linhas.push('Últimas alterações feitas neste PC, da mais recente para a mais antiga:');
+      for (const h of recentes) {
+        linhas.push(`- ${h.quando}: "${h.tarefa}" → ${h.sucesso ? 'resultou' : 'falhou'}; comando: ${String(h.comando).slice(0, 300)}` +
+          (h.desfazer ? `; para desfazer: ${String(h.desfazer).slice(0, 300)}` : '; sem comando para desfazer'));
+      }
+    }
+  }
+
   return linhas.length ? linhas.join('\n') : null;
+}
+
+const PEDE_PARA_DESFAZER = /\b(desfaz|desfazer|anula|anular|reverte|reverter|repoe|repor|volta atras|voltar atras|como estava|a ultima alteracao)/;
+
+function normalizarTexto(texto) {
+  return String(texto || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
 
 let recolhaEmCurso = null;
@@ -306,9 +362,9 @@ async function consultar({ tarefa, script } = {}) {
       return {
         corrido: false,
         classe: 'muda',
-        texto: `NÃO CORREU. Este comando muda o PC (${motivo}). Por agora só corro comandos que apenas leem. ` +
+        texto: `NÃO CORREU. Este comando muda o PC (${motivo}), e esta ferramenta só lê. ` +
           'Se o pedido era para ver alguma coisa, escreve outro comando que só leia. Se o utilizador quer mudar algo, ' +
-          'diz-lhe com franqueza que isso ainda não é feito por comandos gerados.'
+          'prepara a alteração com a ferramenta de alterações, que pede confirmação.'
       };
     }
     return {
@@ -351,8 +407,296 @@ async function consultar({ tarefa, script } = {}) {
   return { corrido: true, classe: 'ler', texto: 'O comando correu sem erros e não devolveu nada.' };
 }
 
+// ═══════════════════════════════════════════════════════════
+// ALTERAÇÕES: PREPARAR, SIMULAR, ESPERAR PELO "SIM", CONFIRMAR
+// ═══════════════════════════════════════════════════════════
+
+const TEMPO_ALTERACAO_MS = 120000;
+const MAX_HISTORICO = 100;
+
+function ficheiroDoHistorico() {
+  return path.join(pastaDeDados(), 'alteracoes-pc.json');
+}
+
+function lerHistorico() {
+  try {
+    const h = JSON.parse(fs.readFileSync(ficheiroDoHistorico(), 'utf8'));
+    return Array.isArray(h) ? h : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function registarNoHistorico(entrada) {
+  const historico = [...lerHistorico(), entrada].slice(-MAX_HISTORICO);
+  const destino = ficheiroDoHistorico();
+  fs.mkdirSync(path.dirname(destino), { recursive: true });
+  const temporario = `${destino}.${process.pid}.tmp`;
+  fs.writeFileSync(temporario, JSON.stringify(historico, null, 2));
+  fs.renameSync(temporario, destino);
+}
+
+/**
+ * As pastas onde as alterações de ficheiros podem mexer.
+ *
+ * As do perfil primeiro: se o Ambiente de trabalho estiver no OneDrive, é lá
+ * que o utilizador o vê, e não em C:\Users\nome\Desktop.
+ */
+function raizesDoUtilizador(ambiente = process.env) {
+  const casa = ambiente.USERPROFILE || '';
+  const pastas = perfilPC.jaConhecido()?.dados?.pastas || {};
+  const raizes = [pastas.ambienteDeTrabalho, pastas.documentos, pastas.transferencias, pastas.imagens];
+  if (casa) for (const p of ['Desktop', 'Documents', 'Downloads', 'Pictures', 'Music', 'Videos']) raizes.push(path.win32.join(casa, p));
+  const nuvem = ambiente.OneDrive || ambiente.OneDriveConsumer;
+  if (nuvem) for (const p of ['Desktop', 'Documents', 'Pictures', 'Ambiente de Trabalho', 'Documentos', 'Imagens']) raizes.push(path.win32.join(nuvem, p));
+  return [...new Set(raizes.filter(Boolean).map(r => String(r).replace(/[\\/]+$/, '')))];
+}
+
+/** O que as alterações confirmadas criaram: é a única coisa que se pode apagar. */
+function criadosPeloNexo() {
+  return new Set(lerHistorico().filter(h => h.sucesso).flatMap(h => h.criados || []));
+}
+
+function contextoDasRegras(opcoes = {}) {
+  const ambiente = ambienteLimpo();
+  return {
+    raizes: opcoes.raizes || raizesDoUtilizador(ambiente),
+    ambiente,
+    protegidos: require('./desempenhoAgent').PROTEGIDOS,
+    criadosPeloNexo: criadosPeloNexo()
+  };
+}
+
+/**
+ * Erros do PowerShell que ninguém percebe, em português.
+ *
+ * O "NonInteractive mode" aparece quando o PowerShell queria perguntar alguma
+ * coisa. Com um Remove-Item sem -Recurse, isso só acontece quando a pasta ou a
+ * chave já tem coisas lá dentro: é a protecção a funcionar.
+ */
+function explicarErro(erro, comando) {
+  const texto = String(erro || '');
+  if (/NonInteractive mode/i.test(texto) && /remove-item/i.test(String(comando || ''))) {
+    return 'a pasta ou chave já não está vazia (tem ficheiros, pastas ou subchaves lá dentro), e o NEXO só apaga o que está vazio, para não levar nada do utilizador';
+  }
+  if (/NonInteractive mode/i.test(texto)) return 'o comando queria fazer uma pergunta a meio, e isso não é possível aqui';
+  return texto;
+}
+
+function cortar(texto, max) {
+  const t = String(texto || '').trim();
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+/** O nome das operações que o PowerShell 5.1 escreve em inglês. */
+const OPERACOES = {
+  'move file': 'mover ficheiro', 'move directory': 'mover pasta', 'copy file': 'copiar ficheiro',
+  'copy directory': 'copiar pasta', 'rename file': 'mudar o nome do ficheiro', 'rename directory': 'mudar o nome da pasta',
+  'create file': 'criar ficheiro', 'create directory': 'criar pasta', 'new item': 'criar', 'create key': 'criar chave',
+  'set property': 'mudar valor', 'new property': 'criar valor', 'remove property': 'apagar valor',
+  'remove key': 'apagar chave', 'remove directory': 'apagar pasta', 'remove file': 'apagar ficheiro',
+  'stop-process': 'fechar', 'add content': 'acrescentar texto', 'set-clipboard': 'área de transferência',
+  'invoke-cimmethod': 'aplicar'
+};
+
+/** As linhas "What if:" em texto legível. */
+function linhasDaSimulacao(anfitriao) {
+  return String(anfitriao || '')
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(l => /^(what if|e se)\s*:/i.test(l))
+    .map(l => l.replace(/^(what if|e se)\s*:\s*/i, ''))
+    .map(l => {
+      const m = l.match(/^Performing the operation "(.+?)" on target "(.*)"\.?$/i);
+      if (!m) return l;
+      const operacao = OPERACOES[m[1].toLowerCase()] || m[1];
+      const alvo = m[2]
+        .replace(/^Item:\s*(.*?)\s+Destination:\s*(.*)$/i, '$1 → $2')
+        .replace(/^Item:\s*(.*?)\s+Property:\s*(.*)$/i, '$2 em $1')
+        .replace(/^(Destination|Item):\s*/i, '');
+      return `${operacao}: ${alvo}`;
+    });
+}
+
+async function lerSemFalhar(script) {
+  try {
+    const r = await correrLeitura(script);
+    return r.saida || (r.totalErros ? `(erro: ${r.erros.join(' | ')})` : '(nada)');
+  } catch (e) {
+    return `(não foi possível ler: ${e.message})`;
+  }
+}
+
+/**
+ * Prepara uma alteração ao PC escrita pelo modelo.
+ *
+ * Nada muda aqui. As regras verificam o comando, a verificação e o desfazer;
+ * a simulação corre quando o comando o permite; e o que volta é uma acção
+ * pronta para ficar à espera do "sim" (ver orchestrator/accoesPendentes.js).
+ *
+ * @returns {Promise<Object>} { success, titulo, descricao, instrucao, rodape, executar }
+ *   ou { success: false, error } com o motivo, para o modelo corrigir.
+ */
+async function prepararAlteracao({ tarefa, explicacao, comando, verificacao, desfazer } = {}, opcoes = {}) {
+  const descricaoDaTarefa = String(tarefa || '').trim() || 'alteração sem descrição';
+  const script = String(comando || '').trim();
+  // opcoes.raizes só existe para os testes trabalharem numa pasta descartável.
+  const ctx = contextoDasRegras(opcoes);
+
+  const veredicto = await regras.verificar(script, ctx);
+  if (veredicto.classe === 'ler') {
+    return { success: false, error: 'Este comando não muda nada. Para ver informação, usa a ferramenta de consultar o PC.' };
+  }
+  if (veredicto.classe !== 'alteracao') {
+    const motivo = veredicto.motivos.join('; ');
+    registarFalha(descricaoDaTarefa, script, `recusado: ${motivo}`);
+    return {
+      success: false,
+      error: `As regras de segurança recusaram o comando: ${motivo}. ` +
+        'Se houver outra forma dentro do que é permitido, prepara-a; se não, diz ao utilizador com franqueza o que não é possível fazer por aqui. Não tentes contornar a regra.'
+    };
+  }
+
+  const leitura = String(verificacao || '').trim();
+  if (leitura) {
+    const v = await regras.verificar(leitura);
+    if (v.classe !== 'ler') {
+      return { success: false, error: `O comando de verificação tem de só ler, e foi recusado: ${v.motivos.join('; ')}. Escreve outro.` };
+    }
+  }
+
+  const criados = veredicto.alteracoes.flatMap(a => a.criados || []);
+
+  let paraDesfazer = String(desfazer || '').trim();
+  let notaDesfazer = '';
+  if (paraDesfazer) {
+    // O desfazer de uma criação apaga o que esta alteração vai criar.
+    const ctxDesfazer = { ...ctx, criadosPeloNexo: new Set([...ctx.criadosPeloNexo, ...criados]) };
+    const d = await regras.verificar(paraDesfazer, ctxDesfazer);
+    if (d.classe !== 'alteracao') {
+      notaDesfazer = ` (o comando para desfazer foi posto de lado: ${(d.motivos || []).join('; ') || 'não muda nada'})`;
+      paraDesfazer = '';
+    }
+  }
+
+  // Simular quando todas as alterações o permitem.
+  let simulacao = null;
+  const simulavel = veredicto.alteracoes.every(a => a.simulavel);
+  if (simulavel) {
+    try {
+      const s = await correrComando(script, { modo: 'simular' });
+      const linhas = linhasDaSimulacao(s.anfitriao);
+      if (s.totalErros && !linhas.length) {
+        const erro = s.erros.map(e => explicarErro(String(e).replace(/\.+\s*$/, ''), script)).join(' | ');
+        registarFalha(descricaoDaTarefa, script, `a simulação falhou: ${erro}`);
+        return {
+          success: false,
+          error: `A simulação deu erro e não mostrou nada que fosse feito: ${cortar(erro, 500)}. ` +
+            'Confirma primeiro com uma leitura se os caminhos e nomes existem, e depois prepara o comando corrigido.'
+        };
+      }
+      simulacao = { linhas, avisos: s.erros };
+    } catch (e) {
+      simulacao = { linhas: [], avisos: [`a simulação não chegou ao fim: ${e.message}`] };
+    }
+  }
+
+  const irreversivel = veredicto.alteracoes.some(a => a.irreversivel);
+  const partes = [];
+  partes.push(`**${cortar(explicacao || descricaoDaTarefa, 400)}**`);
+  partes.push('');
+  partes.push('O que o NEXO confirmou no comando:');
+  for (const a of veredicto.alteracoes) partes.push(`- ${a.resumo}${a.irreversivel ? ' ⚠️ não se desfaz' : ''}`);
+
+  if (simulacao) {
+    partes.push('');
+    if (simulacao.linhas.length) {
+      partes.push(`Simulação, sem mudar nada (${simulacao.linhas.length} ${simulacao.linhas.length === 1 ? 'operação' : 'operações'}):`);
+      for (const l of simulacao.linhas.slice(0, 12)) partes.push(`- ${cortar(l, 220)}`);
+      if (simulacao.linhas.length > 12) partes.push(`- … e mais ${simulacao.linhas.length - 12}`);
+    } else {
+      partes.push('Simulação: o comando não indicou nenhuma operação.');
+    }
+    if (simulacao.avisos.length) {
+      // Criar a chave e depois o valor: a simulação não cria a chave, e o
+      // segundo passo queixa-se de que ela não existe.
+      const dependentes = simulacao.linhas.length ? ' (quando um passo depende de outro, a simulação queixa-se porque não fez o primeiro)' : '';
+      partes.push(`Avisos da simulação${dependentes}: ${cortar(simulacao.avisos.join(' | '), 300)}`);
+    }
+  } else {
+    partes.push('');
+    partes.push('Este comando não se pode simular antes; o alvo acima foi verificado pelo código.');
+  }
+
+  partes.push('');
+  partes.push('Comando:');
+  partes.push('```powershell');
+  partes.push(script);
+  partes.push('```');
+  partes.push(paraDesfazer ? `Para desfazer depois: \`${cortar(paraDesfazer, 300)}\`` : (irreversivel ? 'Isto não se desfaz.' : 'Não há um comando para desfazer.'));
+
+  const executar = async () => executarAlteracao({ tarefa: descricaoDaTarefa, comando: script, verificacao: leitura, desfazer: paraDesfazer, criados });
+
+  return {
+    success: true,
+    titulo: descricaoDaTarefa,
+    descricao: partes.join('\n'),
+    instrucao: 'Mostra ao utilizador o que está acima tal como está, com o comando, sem o resumir nem tirar partes, ' +
+      `e pergunta se confirma. Ele responde "sim" para avançar ou "não" para cancelar. Não digas que já foi feito.${notaDesfazer}`,
+    rodape: paraDesfazer ? '_Se quiseres voltar atrás, diz "desfaz a última alteração"._' : '',
+    executar
+  };
+}
+
+/**
+ * Corre a alteração que o utilizador confirmou, e confirma com uma leitura.
+ * @returns {Promise<{ success: boolean, message: string }>}
+ */
+async function executarAlteracao({ tarefa, comando, verificacao, desfazer, criados = [] }) {
+  const antes = verificacao ? await lerSemFalhar(verificacao) : null;
+
+  let resultado;
+  try {
+    resultado = await correrComando(comando, { modo: 'confirmado', timeout: TEMPO_ALTERACAO_MS });
+  } catch (err) {
+    const motivo = err.killed ? `demorou mais de ${TEMPO_ALTERACAO_MS / 1000}s e foi interrompido (pode ter ficado a meio)` : err.message;
+    registarFalha(tarefa, comando, motivo);
+    registarNoHistorico({ quando: new Date().toISOString(), tarefa, comando, desfazer, sucesso: false, erro: motivo });
+    return { success: false, message: `❌ ${tarefa}: ${motivo}.` };
+  }
+
+  const depois = verificacao ? await lerSemFalhar(verificacao) : null;
+  const sucesso = resultado.totalErros === 0;
+  resultado.erros = resultado.erros.map(e => explicarErro(e, comando));
+
+  if (sucesso) registarSucesso(tarefa, comando, { tipo: 'alteracao', verificacao, desfazer });
+  else registarFalha(tarefa, comando, resultado.erros.join(' | '));
+  registarNoHistorico({ quando: new Date().toISOString(), tarefa, comando, desfazer, verificacao, antes, depois, sucesso, criados, erro: sucesso ? undefined : resultado.erros.join(' | ') });
+
+  const linhas = [];
+  linhas.push(sucesso ? `✅ Feito: ${tarefa}.` : `❌ ${tarefa}: o comando deu erro.`);
+  if (!sucesso) linhas.push(`Erro: ${cortar(resultado.erros.join(' | '), 600)}`);
+  if (resultado.saida) linhas.push(`Resposta do comando: ${cortar(resultado.saida, 600)}`);
+
+  if (verificacao) {
+    linhas.push('');
+    linhas.push(`Verificação, antes: \`${cortar(antes, 300)}\``);
+    linhas.push(`Verificação, depois: \`${cortar(depois, 300)}\``);
+    if (sucesso && antes === depois) {
+      linhas.push('⚠️ A verificação mostra o mesmo antes e depois. Pode já estar assim, ou só se notar depois de reabrir a aplicação ou de reiniciar a sessão.');
+    }
+  }
+  return { success: sucesso, message: linhas.join('\n') };
+}
+
 module.exports = {
   consultar,
+  prepararAlteracao,
+  executarAlteracao,
+  raizesDoUtilizador,
+  lerHistorico,
+  linhasDaSimulacao,
+  correrComando,
   correrLeitura,
   notasPara,
   prepararPerfil,

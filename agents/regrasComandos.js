@@ -25,6 +25,7 @@
  */
 
 const powershell = require('./powershell');
+const regrasAlteracoes = require('./regrasAlteracoes');
 
 // ═══════════════════════════════════════════════════════════
 // O QUE PODE CORRER
@@ -146,9 +147,25 @@ function AlvoPerigoso($n) {
   return $true
 }
 
+function ValorDe($n) {
+  # O valor de um argumento quando está escrito no comando; $null quando só se
+  # sabe a correr. Os textos com $env:X vão em bruto, e é o código que decide.
+  if ($null -eq $n) { return [ordered]@{ tipo = 'interruptor'; valor = $null; valores = @(); texto = $null } }
+  $valor = $null; $valores = @()
+  if ($n -is [System.Management.Automation.Language.ConstantExpressionAst]) { $valor = $n.Value }
+  elseif ($n -is [System.Management.Automation.Language.ArrayLiteralAst]) {
+    $todas = $true
+    foreach ($el in $n.Elements) {
+      if ($el -is [System.Management.Automation.Language.ConstantExpressionAst]) { $valores += $el.Value } else { $todas = $false }
+    }
+    if (-not $todas) { $valores = @() }
+  }
+  [ordered]@{ tipo = $n.GetType().Name; valor = $valor; valores = @($valores); texto = $n.Extent.Text }
+}
+
 $comandos = @(foreach ($c in (Todos 'CommandAst')) {
   $nome = $c.GetCommandName()
-  $resolvido = $null; $tipo = $null
+  $resolvido = $null; $tipo = $null; $cmd = $null; $simulavel = $false; $caminhoDoPrograma = $null
   if ($nome -and $nome -notmatch '[\*\?\[]') {
     $cmd = Get-Command -Name $nome -ErrorAction SilentlyContinue | Select-Object -First 1
     # O ResolvedCommand vem vazio enquanto o módulo do comando não foi
@@ -170,7 +187,32 @@ $comandos = @(foreach ($c in (Todos 'CommandAst')) {
     $espalhado = ($e -is [System.Management.Automation.Language.VariableExpressionAst] -and $e.Splatted)
     [ordered]@{ tipo = $e.GetType().Name; parametro = $par; espalhado = [bool]$espalhado }
   })
-  [ordered]@{ nome = $nome; resolvido = $resolvido; tipo = $tipo; doSistema = [bool]$doSistema; invocacao = [string]$c.InvocationOperator; elementos = $elementos }
+  if ($cmd) {
+    $simulavel = [bool]($cmd.Parameters -and $cmd.Parameters.ContainsKey('WhatIf'))
+    if ([string]$cmd.CommandType -eq 'Application') { $caminhoDoPrograma = [string]$cmd.Source }
+  }
+
+  # O ligador do próprio PowerShell diz a que parâmetro vai cada argumento,
+  # mesmo sem nome ("Set-ItemProperty 'HKCU:\x' Nome 0") ou abreviado.
+  $parametros = @()
+  try {
+    $ligacao = [System.Management.Automation.Language.StaticParameterBinder]::BindCommand($c, $true)
+    $parametros = @(foreach ($p in $ligacao.BoundParameters.GetEnumerator()) {
+      $v = ValorDe $p.Value.Value
+      $v.nome = [string]$p.Key
+      $v
+    })
+  } catch { }
+
+  $posicao = 0
+  if ($c.Parent -is [System.Management.Automation.Language.PipelineAst]) { $posicao = $c.Parent.PipelineElements.IndexOf($c) }
+
+  [ordered]@{
+    nome = $nome; resolvido = $resolvido; tipo = $tipo; doSistema = [bool]$doSistema
+    invocacao = [string]$c.InvocationOperator; elementos = $elementos
+    simulavel = $simulavel; caminhoDoPrograma = $caminhoDoPrograma
+    parametros = $parametros; posicao = $posicao; texto = $c.Extent.Text
+  }
 })
 
 $metodos = @(foreach ($m in (Todos 'InvokeMemberExpressionAst')) {
@@ -252,12 +294,17 @@ function nomeDeTipo(tipo) {
 /**
  * Decide, a partir da árvore, se o comando pode correr.
  *
- * @returns {{ classe: 'ler'|'muda'|'recusado', motivos: string[] }}
- *   'ler' corre; 'muda' é um comando que altera o PC (fica para a fase com
- *   confirmação); 'recusado' é tudo o resto que não se consegue garantir.
+ * @param {Object} analise  a árvore resumida pelo analisador
+ * @param {Object} [alterar]  quando presente, aceita também as alterações da
+ *   lista de agents/regrasAlteracoes.js: { raizes, ambiente, protegidos }
+ * @returns {{ classe: 'ler'|'muda'|'alteracao'|'recusado', motivos: string[], alteracoes?: Array }}
+ *   'ler' corre já; 'alteracao' só com um "sim" (e só no modo alterar);
+ *   'muda' é, no modo de leitura, um comando que altera o PC; 'recusado' é
+ *   tudo o resto que não se consegue garantir.
  */
-function classificar(analise) {
+function classificar(analise, alterar = null) {
   const motivos = [];
+  const alteracoes = [];
   let muda = false;
 
   const erros = lista(analise.errosSintaxe);
@@ -278,11 +325,30 @@ function classificar(analise) {
     if (funcoes.has(String(c.nome).toLowerCase()) && !c.resolvido) continue;
 
     if (!c.resolvido) { motivos.push(`"${escrito}" não é um comando conhecido neste PC`); continue; }
+
+    const elementos = lista(c.elementos);
+    // "Get-Process @p" leva os parâmetros escondidos numa tabela, e aí a
+    // verificação de -ComputerName não os via.
+    if (elementos.some(e => e.espalhado)) { motivos.push(`${c.resolvido} recebe parâmetros escondidos numa variável (@)`); continue; }
+    const recusado = elementos.find(e => e.parametro && PARAMETROS_RECUSADOS.has(String(e.parametro).toLowerCase()));
+    if (recusado) { motivos.push(`${c.resolvido} com -${recusado.parametro} sai deste PC ou pede credenciais`); continue; }
+
+    if (c.tipo === 'Application' && alterar) {
+      const r = regrasAlteracoes.avaliarAlteracao(c, analise, alterar);
+      if (r.motivo) motivos.push(r.motivo); else alteracoes.push(r);
+      continue;
+    }
     if (c.tipo === 'Application' || c.tipo === 'ExternalScript') { motivos.push(`"${escrito}" é um programa ou script externo`); continue; }
 
     const nome = String(c.resolvido).toLowerCase();
 
     if (VERBOS_QUE_MUDAM.test(nome) && !COMANDOS_DE_ARRUMAR.has(nome)) {
+      if (alterar) {
+        if (c.doSistema === false) { motivos.push(`${c.resolvido} vem de um módulo instalado à parte, não do Windows`); continue; }
+        const r = regrasAlteracoes.avaliarAlteracao(c, analise, alterar);
+        if (r.motivo) motivos.push(r.motivo); else alteracoes.push(r);
+        continue;
+      }
       muda = true;
       motivos.push(`${c.resolvido} muda o PC`);
       continue;
@@ -291,16 +357,6 @@ function classificar(analise) {
     if (PARECE_SEGREDO.test(nome)) { motivos.push(`${c.resolvido} mexe com credenciais ou segredos`); continue; }
     if (!nome.startsWith('get-') && !COMANDOS_DE_ARRUMAR.has(nome)) { motivos.push(`${c.resolvido} não está na lista de leituras`); continue; }
     if (c.doSistema === false) { motivos.push(`${c.resolvido} vem de um módulo instalado à parte, não do Windows`); continue; }
-
-    const elementos = lista(c.elementos);
-    // "Get-Process @p" leva os parâmetros escondidos numa tabela, e aí a
-    // verificação de -ComputerName não os via.
-    if (elementos.some(e => e.espalhado)) motivos.push(`${c.resolvido} recebe parâmetros escondidos numa variável (@)`);
-    for (const e of elementos) {
-      if (e.parametro && PARAMETROS_RECUSADOS.has(String(e.parametro).toLowerCase())) {
-        motivos.push(`${c.resolvido} com -${e.parametro} sai deste PC ou pede credenciais`);
-      }
-    }
 
     // "ForEach-Object Delete" chama o método Delete em cada objecto.
     if (nome === 'foreach-object') {
@@ -344,8 +400,11 @@ function classificar(analise) {
   // entregar-lhe as credenciais de rede. O Windows aceita também //servidor e
   // file://servidor. Um texto que é só "\" ou "/" apanha as montagens aos
   // bocados, como '\' + '\servidor'.
+  // O site que uma alteração aprovada abre é o único endereço aceite.
+  const permitidos = new Set(alteracoes.flatMap(a => a.textosPermitidos || []));
   for (const t of lista(analise.textos)) {
     const texto = String(t);
+    if (permitidos.has(texto)) continue;
     if (/^\s*[\\/]{2}/.test(texto) || /^\s*[\\/]\s*$/.test(texto) || /::\s*[\\/]{2}/.test(texto) || /file:|:\/\//i.test(texto)) {
       motivos.push('usa um caminho de rede ou um endereço (\\\\servidor, file://)');
       break;
@@ -356,12 +415,25 @@ function classificar(analise) {
     motivos.push('monta texto, endereços ou código a partir de outras coisas');
   }
 
+  if (alterar) {
+    if (alteracoes.length > MAX_ALTERACOES) motivos.push(`são ${alteracoes.length} alterações num só comando; o máximo é ${MAX_ALTERACOES}, para o utilizador conseguir ler o que aprova`);
+    if (motivos.length) return { classe: 'recusado', motivos: [...new Set(motivos)] };
+    if (alteracoes.length) return { classe: 'alteracao', motivos: [], alteracoes };
+    return { classe: 'ler', motivos: [] };
+  }
+
   if (!motivos.length) return { classe: 'ler', motivos: [] };
   return { classe: muda ? 'muda' : 'recusado', motivos: [...new Set(motivos)] };
 }
 
-/** Analisa e decide de uma vez. */
-async function verificar(script) {
+const MAX_ALTERACOES = 10;
+
+/**
+ * Analisa e decide de uma vez.
+ * @param {string} script
+ * @param {Object} [alterar]  ver classificar()
+ */
+async function verificar(script, alterar = null) {
   const texto = String(script || '').trim();
   if (!texto) return { classe: 'recusado', motivos: ['o comando está vazio'] };
   if (texto.length > 4000) return { classe: 'recusado', motivos: ['o comando é demasiado comprido para ser verificado com confiança'] };
@@ -372,7 +444,7 @@ async function verificar(script) {
   } catch (err) {
     return { classe: 'recusado', motivos: [`não foi possível verificar o comando: ${err.message}`] };
   }
-  return classificar(analise);
+  return classificar(analise, alterar);
 }
 
 module.exports = {

@@ -353,6 +353,59 @@ const FERRAMENTAS = [
     }
   },
 
+  // A alteração segue o caminho das outras acções: a ferramenta só prepara, e
+  // quem corre é o servidor, depois do "sim". A diferença é que o comando é
+  // escrito pelo modelo, por isso as regras verificam-no, simulam-no quando
+  // dá, e o comando vai mostrado ao utilizador tal como vai correr.
+  {
+    nome: 'preparar_alteracao_pc',
+    risco: 'ler',
+    // Os verbos soltos ("cria", "apaga", "liga") vão de propósito. Medido:
+    // "cria no registo a chave X" não trazia esta ferramenta, e o modelo
+    // escreveu uma proposta em texto, com "sim/não", sem nada preparado.
+    // "apaga" também: com a ferramenta à frente, as regras recusam e o
+    // utilizador fica a saber porquê, em vez de ler uma proposta inventada.
+    palavras: ['registo', 'chave', 'cria', 'criar', 'apaga', 'apagar', 'elimina', 'remove', 'liga ', 'desliga',
+               'abre', 'fecha', 'mete', 'agenda', 'bloqueia', 'reinicia', 'instala',
+               'muda o', 'muda a', 'mudar o', 'mudar a', 'altera', 'ativa', 'activa', 'desativa', 'desactiva',
+               'poe o', 'poe a', 'coloca o', 'coloca a', 'tema escuro', 'modo escuro', 'tema claro', 'modo claro',
+               'brilho', 'abre o site', 'abre o programa', 'abre as definicoes', 'abre a pasta', 'move', 'mover',
+               'copia', 'copiar', 'renomeia', 'muda o nome', 'cria uma pasta', 'cria a pasta', 'cria um ficheiro',
+               'esvazia', 'reciclagem', 'bloqueia o pc', 'bloquear o pc', 'desliga o pc', 'desligar o pc',
+               'reinicia o pc', 'desliga o computador', 'cancela o encerramento', 'plano de energia',
+               'poupanca de energia', 'alto desempenho', 'desfaz', 'volta atras', 'repoe', 'configura'],
+    descricao: 'Prepara uma alteração ao PC com um comando PowerShell 5.1 escrito por ti, e deixa-a à espera do "sim" do utilizador. NÃO MUDA NADA ao ser chamada. O que pode fazer: mudar valores do registo do utilizador (HKCU, por exemplo o tema escuro em Themes\\Personalize); mudar o brilho (Invoke-CimMethod WmiSetBrightness); abrir um programa, pasta, site ou página das Definições (Start-Process, ms-settings:); criar pastas e ficheiros novos (New-Item), copiar, mover e renomear, só dentro das pastas pessoais; fechar um programa pelo nome (Stop-Process -Name); esvaziar a Reciclagem; bloquear o PC (rundll32.exe user32.dll,LockWorkStation); agendar ou cancelar o encerramento (shutdown /s /t segundos, shutdown /a); mudar o plano de energia (powercfg /setactive). O alvo tem de estar escrito no comando: nada de variáveis, pipeline ou ciclos para o alvo. Para criar uma chave com um valor, põe no mesmo comando New-Item (sem -Force) e New-ItemProperty, e dá como desfazer o Remove-Item da chave. Fica de fora: apagar ficheiros do utilizador (só se apaga, com Remove-Item sem -Recurse, o que o próprio NEXO criou), -Force, HKLM, serviços, drivers e desinstalar.',
+    parametros: {
+      type: 'object',
+      properties: {
+        tarefa: { type: 'string', description: 'O que o utilizador pediu, em poucas palavras e em português.' },
+        explicacao: { type: 'string', description: 'Em português simples, o que vai mudar para o utilizador depois do "sim".' },
+        comando: { type: 'string', description: 'O comando PowerShell que faz a alteração, com os caminhos e nomes escritos por extenso.' },
+        verificacao: { type: 'string', description: 'Um comando que SÓ LÊ o estado que vai mudar, para comparar antes e depois. Por exemplo Get-ItemPropertyValue do mesmo valor, ou Test-Path da pasta.' },
+        desfazer: { type: 'string', description: 'O comando que repõe o estado anterior, se existir (por exemplo o mesmo Set-ItemProperty com o valor antigo). Vazio se não houver.' }
+      },
+      required: ['tarefa', 'explicacao', 'comando', 'verificacao'],
+      additionalProperties: false
+    },
+    notas: (mensagem) => { comandosAgent.prepararPerfil(); return comandosAgent.notasPara(mensagem); },
+    executar: async (args, ctx) => {
+      const falta = semUtilizador(ctx);
+      if (falta) return falta;
+      const preparada = await comandosAgent.prepararAlteracao(args);
+      security.logAction(ctx.userId, 'alteracao-pc-preparada', { tarefa: args.tarefa, preparada: preparada.success, comando: String(args.comando || '').slice(0, 300) });
+      const texto = proporAccao(ctx, preparada);
+
+      // O que vai ser aprovado chega ao ecrã tal como o código o escreveu.
+      // Medido: passado pelo modelo, o bloco saiu resumido, sem a simulação e
+      // com uma "verificação antes de executar" que não existia.
+      // Só quando ficou mesmo à espera: com outra acção pendente, não ficou.
+      if (preparada.success && texto.startsWith('ACÇÃO PREPARADA') && ctx.saidaDirecta) {
+        ctx.saidaDirecta.texto = `${preparada.descricao}\n\nConfirmas? Responde **sim** para avançar ou **não** para cancelar.`;
+      }
+      return texto;
+    }
+  },
+
   {
     nome: 'ver_area_transferencia',
     risco: 'ler',
@@ -504,6 +557,7 @@ const EM_CURSO = {
   preparar_arranque: '✋ a preparar a mudança no arranque (vou pedir confirmação)',
   perfil_do_pc: '🖥️ a ver o que sei deste PC',
   consultar_pc: '🔎 a consultar o PC (só leitura)',
+  preparar_alteracao_pc: '✋ a verificar e simular a alteração (vou pedir confirmação)',
   info_sistema: '🖥️ a ver o estado da máquina',
   ver_area_transferencia: '📋 a ver a área de transferência',
   analisar_ecra: '👁️ a olhar para o ecrã',
@@ -714,7 +768,8 @@ function notasDasFerramentas(seleccionadas, mensagem) {
     if (typeof f.notas !== 'function') continue;
     try {
       const nota = f.notas(mensagem);
-      if (nota) notas.push(nota);
+      // A de consultar e a de alterar partilham as mesmas notas.
+      if (nota && !notas.includes(nota)) notas.push(nota);
     } catch (e) {
       console.warn(`  ⚠️ Notas de ${f.nome} falharam: ${e.message}`);
     }
