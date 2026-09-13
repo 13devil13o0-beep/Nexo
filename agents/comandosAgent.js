@@ -196,6 +196,7 @@ function limparExtra(extra = {}) {
   if (extra.tipo) limpo.tipo = extra.tipo;
   if (extra.verificacao) limpo.verificacao = String(extra.verificacao).trim();
   if (extra.desfazer) limpo.desfazer = String(extra.desfazer).trim();
+  if (extra.processo) limpo.processo = String(extra.processo);
   return limpo;
 }
 
@@ -287,7 +288,9 @@ function notasPara(pedido) {
   if (resultaram.length) {
     linhas.push('Comandos que já resultaram neste PC em pedidos parecidos (reutiliza se servirem):');
     for (const e of resultaram) {
-      if (e.tipo === 'alteracao') {
+      if (e.tipo === 'janela') {
+        linhas.push(`- "${e.tarefa}" (${e.vezes}x, passos numa janela de ${e.processo || '?'}): ${e.script.slice(0, 500)}`);
+      } else if (e.tipo === 'alteracao') {
         linhas.push(`- "${e.tarefa}" (${e.vezes}x, alteração): ${e.script.slice(0, 500)}` +
           (e.verificacao ? ` | verificação: ${e.verificacao.slice(0, 200)}` : '') +
           (e.desfazer ? ` | desfazer: ${e.desfazer.slice(0, 200)}` : ''));

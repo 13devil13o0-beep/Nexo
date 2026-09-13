@@ -189,6 +189,15 @@ function setCooldown(providerId) {
   providerCooldowns.set(providerId, Date.now() + COOLDOWN_MS);
 }
 
+/**
+ * Esquece as pausas. Só para os testes: um pedido real ao Groq que bate no
+ * limite por minuto deixava-o em pausa, e os testes seguintes com um fetch
+ * falso saltavam-no e falhavam sem nada estar errado no código.
+ */
+function esquecerPausas() {
+  providerCooldowns.clear();
+}
+
 // ═══════════════════════════════════════════════════════════
 // UMA FALHA DE LIGAÇÃO NÃO É UM FORNECEDOR EM BAIXO
 // ═══════════════════════════════════════════════════════════
@@ -1396,5 +1405,6 @@ module.exports = {
   querLocal,
   ehFalhaDeLigacao,
   escolherCadeia,
+  esquecerPausas,
   PROVIDERS
 };

@@ -4190,9 +4190,13 @@ describe('🔁 Falha de ligação: tenta outra vez antes de pôr o fornecedor de
     };
     process.env.LLM_PROVIDER_ORDER = 'groq';
     process.env.GROQ_API_KEY = process.env.GROQ_API_KEY || 'gsk_teste_chave_falsa_longa';
+    // Um teste anterior com pedidos reais pode ter deixado o Groq em pausa
+    // (limite por minuto). Medido: estes dois falhavam uma vez em cada três.
+    llmRouter.esquecerPausas();
     try {
       return await tarefa(() => chamadas);
     } finally {
+      llmRouter.esquecerPausas();
       global.fetch = antes.fetch;
       if (antes.ordem === undefined) delete process.env.LLM_PROVIDER_ORDER; else process.env.LLM_PROVIDER_ORDER = antes.ordem;
       if (antes.chave === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = antes.chave;
@@ -4913,6 +4917,151 @@ describe('🔁 Preparar, simular, confirmar e verificar (numa pasta descartável
     assertEqual(toolLoop.avisoSeNadaPreparado('Confirmas? Responde sim para avançar.', { userId: 'teste-real' }), '');
     assertEqual(toolLoop.avisoSeNadaPreparado('Olá, tudo bem?', { userId: 'outro' }), '');
     accoesPendentes.limparTudo();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// FASE 3: JANELAS PELO NOME DOS BOTÕES (UI AUTOMATION)
+// ═══════════════════════════════════════════════════════════
+
+describe('🪟 Janelas: o que fica de fora e o que se aceita', () => {
+  const janelas = require('../agents/janelasAgent');
+  const tools = require('../orchestrator/tools');
+
+  test('terminais, consolas, credenciais, gestores de palavras-passe e o NEXO ficam de fora', () => {
+    assert(janelas.janelaProtegida({ processo: 'WindowsTerminal', titulo: 'PowerShell', classe: 'CASCADIA_HOSTING_WINDOW_CLASS' }));
+    assert(janelas.janelaProtegida({ processo: 'powershell', titulo: 'Windows PowerShell', classe: 'ConsoleWindowClass' }));
+    assert(janelas.janelaProtegida({ processo: 'cmd', titulo: 'Linha de comandos', classe: '' }));
+    assert(janelas.janelaProtegida({ processo: 'KeePassXC', titulo: 'Cofre', classe: 'Qt5' }));
+    assert(janelas.janelaProtegida({ processo: 'CredentialUIBroker', titulo: 'Segurança do Windows', classe: 'x' }));
+    assert(janelas.janelaProtegida({ processo: 'NEXO', titulo: 'NEXO', classe: 'Chrome_WidgetWin_1' }));
+    assert(janelas.janelaProtegida({ processo: 'explorer', titulo: 'Executar', classe: '#32770' }), 'a caixa Executar corre qualquer programa');
+  });
+
+  test('programas normais e janelas gráficas feitas por scripts passam', () => {
+    assertEqual(janelas.janelaProtegida({ processo: 'Notepad', titulo: 'Bloco de notas', classe: 'Notepad' }), null);
+    assertEqual(janelas.janelaProtegida({ processo: 'powershell', titulo: 'Formulário', classe: 'Window' }), null);
+    assertEqual(janelas.janelaProtegida({ processo: 'explorer', titulo: 'Documentos', classe: 'CabinetWClass' }), null);
+  });
+
+  test('passos: acções conhecidas, tipo e nome, e no máximo dez', () => {
+    const janela = { processo: 'Notepad' };
+    assert(janelas.validarPassos([{ accao: 'carregar', tipo: 'Button', nome: 'Guardar' }], janela).passos);
+    assert(janelas.validarPassos([{ accao: 'apagar', tipo: 'Button', nome: 'x' }], janela).motivo);
+    assert(janelas.validarPassos([{ accao: 'carregar', nome: 'Guardar' }], janela).motivo);
+    assert(janelas.validarPassos(Array.from({ length: 11 }, () => ({ accao: 'carregar', tipo: 'Button', nome: 'x' })), janela).motivo);
+    assert(janelas.validarPassos([], janela).motivo);
+  });
+
+  test('não se escreve no Explorador nem se escrevem endereços que correm código', () => {
+    // A barra de endereço do Explorador corre programas.
+    assert(janelas.validarPassos([{ accao: 'escrever', tipo: 'Edit', nome: 'Endereço', texto: 'cmd' }], { processo: 'explorer' }).motivo);
+    assert(janelas.validarPassos([{ accao: 'escrever', tipo: 'Edit', nome: 'Endereço', texto: 'javascript:alert(1)' }], { processo: 'chrome' }).motivo);
+  });
+
+  test('botões que apagam, enviam ou pagam são marcados como sensíveis', () => {
+    for (const n of ['Eliminar tudo', 'Enviar', 'Comprar agora', 'Pagar', 'Desinstalar', 'Delete']) assert(janelas.NOMES_SENSIVEIS.test(n), n);
+    assert(!janelas.NOMES_SENSIVEIS.test('Guardar'));
+  });
+
+  test('"carrega em Guardar" sem coordenadas vai para as janelas; com coordenadas continua clique', () => {
+    assert(tools.melhorComFerramentas('input_click', { x: null, y: null }));
+    assert(!tools.melhorComFerramentas('input_click', { x: 500, y: 300 }));
+    assertEqual(tools.ferramentasDaIntencao('input_click')[0], 'ler_janela');
+    const nomes = tools.seleccionar('carrega em Guardar no bloco de notas').map(f => f.nome);
+    assert(nomes.includes('ler_janela') && nomes.includes('preparar_accao_janela'), nomes.join(','));
+  });
+
+  test('"carrega em Guardar" já não é a tecla "em"', () => {
+    const { parseIntent } = require('../orchestrator/intentParser');
+    assertEqual(parseIntent('carrega em Guardar no bloco de notas').intent, 'input_click');
+    assertEqual(parseIntent('carrega no botão Eliminar tudo').intent, 'input_click');
+    const f5 = parseIntent('carrega na tecla F5');
+    assertEqual(f5.intent, 'input_key');
+    assertEqual(f5.entities.key, 'F5');
+    assertEqual(parseIntent('carrega enter 3 vezes').entities.times, 3);
+  });
+
+  test('ler janelas é leitura; agir só prepara', () => {
+    assertEqual(tools.porNome('ver_janelas').risco, 'ler');
+    assertEqual(tools.porNome('ler_janela').risco, 'ler');
+    assertEqual(tools.porNome('preparar_accao_janela').risco, 'ler');
+  });
+});
+
+describe('🪟 Janelas a sério: numa janela de teste, nunca nas do utilizador', () => {
+  const { spawn } = require('child_process');
+  const fs = require('fs');
+  const os = require('os');
+  const janelas = require('../agents/janelasAgent');
+
+  /** Abre a janela de teste, corre a tarefa e fecha-a, aconteça o que acontecer. */
+  async function comJanelaDeTeste(tarefa) {
+    const titulo = `NEXO-Teste-Janela-${process.pid}-${Date.now()}`;
+    const registo = path.join(os.tmpdir(), `${titulo}.txt`);
+    const processo = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'janela-de-teste.ps1'), '-Titulo', titulo, '-Registo', registo], { stdio: 'ignore', windowsHide: false });
+    try {
+      let aberta = false;
+      for (let i = 0; i < 30 && !aberta; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        aberta = (await janelas.listarJanelas()).some(j => j.titulo === titulo);
+      }
+      assert(aberta, 'a janela de teste não abriu');
+      return await tarefa(titulo, registo);
+    } finally {
+      processo.kill();
+      fs.rmSync(registo, { force: true });
+    }
+  }
+
+  test('lê os elementos, e o campo de palavra-passe aparece sem valor', async () => {
+    await comJanelaDeTeste(async (titulo) => {
+      const texto = await janelas.lerJanela(titulo);
+      assertIncludes(texto, 'Edit "Nome"');
+      assertIncludes(texto, 'Button "Guardar"');
+      assertIncludes(texto, 'Edit "Palavra-passe"');
+      assertIncludes(texto, 'palavra-passe (não se lê nem se preenche)');
+      assert(!/Palavra-passe[^\n]*valor=/.test(texto), 'mostrou o valor da palavra-passe');
+    });
+  });
+
+  test('prepara sem mexer; com o "sim" preenche, carrega e confirma o estado', async () => {
+    await comPastaDeDados(async () => {
+      await comJanelaDeTeste(async (titulo, registo) => {
+        const p = await janelas.prepararAccaoJanela({
+          tarefa: 'preencher e guardar', explicacao: 'Preenche e guarda.', janela: titulo,
+          passos: [
+            { accao: 'escrever', tipo: 'Edit', nome: 'Nome', texto: 'Maria João' },
+            { accao: 'marcar', tipo: 'CheckBox', nome: 'Aceito os termos' },
+            { accao: 'escolher', tipo: 'ListItem', nome: 'Verde' },
+            { accao: 'carregar', tipo: 'Button', nome: 'Guardar' }
+          ]
+        });
+        assert(p.success, p.error);
+        assertIncludes(p.descricao, '4. carregar em Button "Guardar"');
+        assert(!fs.existsSync(registo), 'carregou antes do "sim"');
+
+        const r = await p.executar();
+        assert(r.success, r.message);
+        assertIncludes(r.message, 'Edit "Nome" = "Maria João"');
+        assertEqual(fs.readFileSync(registo, 'utf8').trim(), 'guardado: Maria João / True / Verde');
+        assertEqual(require('../agents/comandosAgent').lerMemoria().resultaram[0].tipo, 'janela');
+      });
+    });
+  });
+
+  test('palavra-passe, elemento inventado e acção que o elemento não aceita são recusados', async () => {
+    await comJanelaDeTeste(async (titulo, registo) => {
+      const senha = await janelas.prepararAccaoJanela({ tarefa: 't', janela: titulo, passos: [{ accao: 'escrever', tipo: 'Edit', nome: 'Palavra-passe', texto: 'x' }] });
+      assertIncludes(senha.error, 'palavra-passe');
+      const inventado = await janelas.prepararAccaoJanela({ tarefa: 't', janela: titulo, passos: [{ accao: 'carregar', tipo: 'Button', nome: 'Não existe' }] });
+      assertIncludes(inventado.error, 'não encontrei');
+      const errada = await janelas.prepararAccaoJanela({ tarefa: 't', janela: titulo, passos: [{ accao: 'escrever', tipo: 'Button', nome: 'Guardar', texto: 'x' }] });
+      assertIncludes(errada.error, 'não aceita');
+      const sensivel = await janelas.prepararAccaoJanela({ tarefa: 't', janela: titulo, passos: [{ accao: 'carregar', tipo: 'Button', nome: 'Eliminar tudo' }] });
+      assertIncludes(sensivel.descricao, '⚠️');
+      assert(!fs.existsSync(registo), 'alguma coisa foi carregada');
+    });
   });
 });
 

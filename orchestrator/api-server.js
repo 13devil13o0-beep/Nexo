@@ -393,7 +393,7 @@ app.post('/api/chat/stream', security.authMiddleware, async (req, res) => {
     
     // Se é um intent específico, usar o router normal — menos as intenções
     // que o catálogo de ferramentas faz melhor. Mesma regra do WebSocket.
-    if (intentData.intent !== 'chat' && !tools.melhorComFerramentas(intentData.intent)) {
+    if (intentData.intent !== 'chat' && !tools.melhorComFerramentas(intentData.intent, intentData.entities)) {
       console.log(`🎯 Intent detectado em SSE: ${intentData.intent}`);
       const userId = security.getUserId({ ...context, source: 'api' });
       const result = await prazo.comPrazo(
@@ -987,7 +987,7 @@ async function handleWSMessage(clientId, message) {
         }
 
         const pelasRegras = !escolha &&
-          intentData.intent !== 'chat' && !tools.melhorComFerramentas(intentData.intent);
+          intentData.intent !== 'chat' && !tools.melhorComFerramentas(intentData.intent, intentData.entities);
 
         // Se é um intent específico (não 'chat'), usar o router normal.
         //

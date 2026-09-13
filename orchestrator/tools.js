@@ -30,6 +30,7 @@ const codeRunner = require('../agents/codeRunner');
 const systemAgent = require('../agents/systemAgent');
 const desempenhoAgent = require('../agents/desempenhoAgent');
 const comandosAgent = require('../agents/comandosAgent');
+const janelasAgent = require('../agents/janelasAgent');
 const perfilPC = require('../agents/perfilPC');
 const accoesPendentes = require('./accoesPendentes');
 const clipboardAgent = require('../agents/clipboardAgent');
@@ -80,6 +81,22 @@ function proporAccao(contexto, preparada) {
     return `NÃO FOI PREPARADA NENHUMA ACÇÃO. ${preparada?.error || 'Motivo desconhecido.'}`;
   }
   return accoesPendentes.propor(contexto.userId, preparada).texto;
+}
+
+/**
+ * Propõe a acção e, se ficou mesmo à espera, manda o bloco para o ecrã tal
+ * como o código o escreveu.
+ *
+ * Medido: passado pelo modelo, o bloco de uma alteração saiu resumido, sem a
+ * simulação e com uma "verificação antes de executar" que não existia. Com
+ * outra acção já pendente, a proposta não fica, e aí quem explica é o modelo.
+ */
+function proporComBloco(contexto, preparada) {
+  const texto = proporAccao(contexto, preparada);
+  if (preparada?.success && texto.startsWith('ACÇÃO PREPARADA') && contexto.saidaDirecta) {
+    contexto.saidaDirecta.texto = `${preparada.descricao}\n\nConfirmas? Responde **sim** para avançar ou **não** para cancelar.`;
+  }
+  return texto;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -393,16 +410,83 @@ const FERRAMENTAS = [
       if (falta) return falta;
       const preparada = await comandosAgent.prepararAlteracao(args);
       security.logAction(ctx.userId, 'alteracao-pc-preparada', { tarefa: args.tarefa, preparada: preparada.success, comando: String(args.comando || '').slice(0, 300) });
-      const texto = proporAccao(ctx, preparada);
+      return proporComBloco(ctx, preparada);
+    }
+  },
 
-      // O que vai ser aprovado chega ao ecrã tal como o código o escreveu.
-      // Medido: passado pelo modelo, o bloco saiu resumido, sem a simulação e
-      // com uma "verificação antes de executar" que não existia.
-      // Só quando ficou mesmo à espera: com outra acção pendente, não ficou.
-      if (preparada.success && texto.startsWith('ACÇÃO PREPARADA') && ctx.saidaDirecta) {
-        ctx.saidaDirecta.texto = `${preparada.descricao}\n\nConfirmas? Responde **sim** para avançar ou **não** para cancelar.`;
-      }
-      return texto;
+  // ═══ Janelas: carregar em botões pelo nome ══════════════
+  //
+  // Ler as janelas é leitura; o que se faz nelas passa pelo mesmo "sim" das
+  // outras acções, com os passos mostrados antes. Ver agents/janelasAgent.js.
+
+  {
+    nome: 'ver_janelas',
+    risco: 'ler',
+    palavras: ['janela', 'janelas', 'programas abertos', 'o que esta aberto', 'o que tenho aberto', 'aplicacoes abertas'],
+    descricao: 'Lista as janelas abertas neste PC: número, título e programa. Usa-a antes de ler ou mexer numa janela, para saberes o número dela.',
+    parametros: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    executar: async () => janelasAgent.textoDasJanelas(await janelasAgent.listarJanelas())
+  },
+
+  {
+    nome: 'ler_janela',
+    risco: 'ler',
+    palavras: ['botao', 'botoes', 'campo', 'campos', 'formulario', 'na janela', 'da janela', 'carrega em', 'clica em',
+               'clica no', 'carrega no', 'preenche', 'escreve no campo', 'escreve na caixa', 'caixa de', 'separador',
+               'menu', 'opcao', 'seleciona', 'selecciona', 'marca a', 'desmarca', 'no bloco de notas', 'nas definicoes'],
+    descricao: 'Lê o que uma janela aberta tem: botões, campos de texto, caixas de seleção, listas, separadores e menus, com o nome de cada um, o valor ou estado e as acções que aceita. Só lê. Os campos de palavra-passe aparecem sem valor. Terminais, credenciais e o próprio NEXO ficam de fora.',
+    parametros: {
+      type: 'object',
+      properties: {
+        janela: { type: 'string', description: 'O número da janela (de ver_janelas), o nome do programa ou parte do título.' }
+      },
+      required: ['janela'],
+      additionalProperties: false
+    },
+    notas: (mensagem) => comandosAgent.notasPara(mensagem),
+    executar: async ({ janela }) => janelasAgent.lerJanela(janela)
+  },
+
+  {
+    nome: 'preparar_accao_janela',
+    risco: 'ler',
+    palavras: ['carrega em', 'clica em', 'clica no', 'carrega no', 'preenche', 'escreve no campo', 'escreve na caixa',
+               'seleciona', 'selecciona', 'escolhe', 'marca a', 'desmarca', 'na janela', 'botao', 'formulario'],
+    descricao: 'Prepara passos numa janela aberta (escrever num campo, carregar num botão, marcar ou desmarcar, escolher um item, abrir ou fechar um menu) e deixa-os à espera do "sim" do utilizador. NÃO FAZ NADA ao ser chamada. Lê primeiro a janela e usa o tipo e o nome de cada elemento exactamente como aparecem na leitura. Até 10 passos, na mesma janela. Campos de palavra-passe, terminais e o próprio NEXO ficam de fora.',
+    parametros: {
+      type: 'object',
+      properties: {
+        tarefa: { type: 'string', description: 'O que o utilizador pediu, em poucas palavras.' },
+        explicacao: { type: 'string', description: 'Em português simples, o que vai acontecer depois do "sim".' },
+        janela: { type: 'string', description: 'O número da janela, de ver_janelas ou ler_janela.' },
+        passos: {
+          type: 'array',
+          description: 'Os passos, por ordem.',
+          items: {
+            type: 'object',
+            properties: {
+              accao: { type: 'string', enum: ['carregar', 'escrever', 'marcar', 'desmarcar', 'escolher', 'expandir', 'recolher'] },
+              tipo: { type: 'string', description: 'O tipo do elemento, como na leitura: Button, Edit, CheckBox, ListItem, TabItem, MenuItem...' },
+              nome: { type: 'string', description: 'O nome do elemento, exactamente como na leitura.' },
+              id: { type: 'string', description: 'O id do elemento, se a leitura o mostrar. Opcional.' },
+              indice: { type: 'integer', description: 'Se houver vários com o mesmo tipo e nome, qual (1 é o primeiro). Opcional.' },
+              texto: { type: 'string', description: 'Só para escrever: o texto a pôr no campo.' }
+            },
+            required: ['accao', 'tipo', 'nome'],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ['tarefa', 'explicacao', 'janela', 'passos'],
+      additionalProperties: false
+    },
+    notas: (mensagem) => comandosAgent.notasPara(mensagem),
+    executar: async (args, ctx) => {
+      const falta = semUtilizador(ctx);
+      if (falta) return falta;
+      const preparada = await janelasAgent.prepararAccaoJanela(args);
+      security.logAction(ctx.userId, 'accao-janela-preparada', { tarefa: args.tarefa, janela: args.janela, preparada: preparada.success, passos: Array.isArray(args.passos) ? args.passos.length : 0 });
+      return proporComBloco(ctx, preparada);
     }
   },
 
@@ -558,6 +642,9 @@ const EM_CURSO = {
   perfil_do_pc: '🖥️ a ver o que sei deste PC',
   consultar_pc: '🔎 a consultar o PC (só leitura)',
   preparar_alteracao_pc: '✋ a verificar e simular a alteração (vou pedir confirmação)',
+  ver_janelas: '🪟 a ver as janelas abertas',
+  ler_janela: '🪟 a ler a janela',
+  preparar_accao_janela: '✋ a confirmar os botões e campos (vou pedir confirmação)',
   info_sistema: '🖥️ a ver o estado da máquina',
   ver_area_transferencia: '📋 a ver a área de transferência',
   analisar_ecra: '👁️ a olhar para o ecrã',
@@ -599,6 +686,7 @@ const INTENCOES_COM_FERRAMENTA = new Set([
   'list_files',
   'system_info',
   'system_list_processes',
+  'system_list_windows',
   // A regra de fechar processos usava "taskkill /IM nome* /F": curinga e
   // força, sem perguntar. "fecha o chrome" fechava tudo o que começasse por
   // "chrome" e perdia o que estivesse por guardar. Passa a ir pela ferramenta
@@ -621,7 +709,11 @@ const INTENCOES_COM_FERRAMENTA = new Set([
  * Este pedido fica melhor servido pelo modelo com ferramentas do que pela
  * regra que o apanhou?
  */
-function melhorComFerramentas(intent) {
+function melhorComFerramentas(intent, entidades = {}) {
+  // "Carrega em Guardar no Bloco de Notas" era apanhado pela regra do clique
+  // e dava um clique onde o rato estivesse. Sem coordenadas, quem sabe onde
+  // está o botão são as ferramentas de janelas.
+  if (intent === 'input_click') return entidades?.x == null || entidades?.y == null;
   return INTENCOES_COM_FERRAMENTA.has(intent);
 }
 
@@ -640,6 +732,8 @@ const FERRAMENTA_DA_INTENCAO = {
   list_files: 'listar_ficheiros',
   system_info: 'info_sistema',
   system_list_processes: 'rever_desempenho',
+  system_list_windows: 'ver_janelas',
+  input_click: 'ler_janela',
   system_kill_process: 'preparar_fecho_programa',
   system_list_dir: 'listar_ficheiros',
   system_read_file: 'ler_ficheiro',

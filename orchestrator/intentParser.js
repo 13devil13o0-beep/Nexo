@@ -37,6 +37,10 @@ function extractLanguage(text) {
   return (names.length ? names[names.length - 1] : all[all.length - 1]).trim();
 }
 
+/** Teclas que "carrega X" pode querer dizer sem a palavra "tecla". */
+const NOMES_DE_TECLAS = 'enter|return|esc|escape|tab|espaço|espaco|space|backspace|delete|del|insert|home|end|' +
+  'pageup|pagedown|up|down|left|right|cima|baixo|esquerda|direita|win|windows|f1|f2|f3|f4|f5|f6|f7|f8|f9|f10|f11|f12';
+
 /**
  * Padrões de intenção
  */
@@ -456,11 +460,17 @@ const INTENT_PATTERNS = {
     patterns: [
       // Ancorados: "carrega" no meio de uma frase não é uma ordem para premir
       // uma tecla no teclado de quem está a escrever.
-      /^\s*(?:pressiona|press|carrega)\s+(?:a\s+)?(?:tecla\s+)?(\w+)(?:\s+(\d+)\s*(?:vezes|x))?/i,
+      //
+      // E só é tecla com a palavra "tecla" ou com o nome de uma tecla. Medido:
+      // "carrega em Guardar no bloco de notas" dava a tecla "em", "carrega no
+      // botão Eliminar" a tecla "no" e "carrega na tecla F5" a tecla "na".
+      /^\s*(?:pressiona|press|carrega)\s+(?:(?:na|no|em|a|o)\s+)?tecla\s+(\w+)(?:\s+(\d+)\s*(?:vezes|x))?/i,
+      new RegExp(`^\\s*(?:pressiona|press|carrega)\\s+(?:(?:na|no|em|a|o)\\s+)?(${NOMES_DE_TECLAS})\\b(?:\\s+(\\d+)\\s*(?:vezes|x))?`, 'i'),
       /^\s*(?:tecla|key)\s+(\w+)/i
     ],
     extract: (text) => {
-      const match = text.match(/(?:pressiona|press|carrega|tecla|key)\s+(?:a\s+)?(?:tecla\s+)?(\w+)(?:\s+(\d+))?/i);
+      const match = text.match(/(?:tecla|key)\s+(\w+)(?:\s+(\d+))?/i)
+        || text.match(new RegExp(`(?:pressiona|press|carrega)\\s+(?:(?:na|no|em|a|o)\\s+)?(${NOMES_DE_TECLAS})\\b(?:\\s+(\\d+))?`, 'i'));
       return { key: match?.[1] || '', times: parseInt(match?.[2]) || 1 };
     }
   },
