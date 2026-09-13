@@ -3674,6 +3674,115 @@ describe('🔨 Responder a um plano de projecto', () => {
     }
   });
 });
+
+// ═══════════════════════════════════════════════════════════
+// OS SEIS BOTÕES: APRESENTAR E PERGUNTAR, NÃO FAZER SOZINHOS
+// ═══════════════════════════════════════════════════════════
+
+describe('🧭 A função escolhida num botão chega ao agente certo', () => {
+  const capacidades = require('../orchestrator/capacidades');
+
+  test('as seis funções da janela existem no servidor', () => {
+    // Os nomes têm de bater certo com o CAPACIDADES de web/public/app.js.
+    for (const nome of ['chat', 'pdf', 'pesquisa', 'codigo', 'ficheiros', 'projeto']) {
+      assert(capacidades.CAPACIDADES[nome], `falta ${nome}`);
+    }
+  });
+
+  test('o que a janela escreve bate certo com o servidor', () => {
+    // Um nome trocado de um lado e não do outro fazia o botão parecer
+    // funcionar e o pedido seguir pelo caminho de sempre, sem aviso nenhum.
+    const fs = require('fs');
+    const path = require('path');
+    const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+    const html = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'index.html'), 'utf8');
+    const noHtml = [...html.matchAll(/data-capacidade="([a-z]+)"/g)].map(m => m[1]);
+    assertEqual(noHtml.length, 6, 'deviam ser seis botões');
+    for (const nome of noHtml) {
+      assert(capacidades.CAPACIDADES[nome], `o botão ${nome} não existe no servidor`);
+      assert(new RegExp(`\\n  ${nome}: \\{`).test(app), `o botão ${nome} não tem apresentação na janela`);
+    }
+  });
+
+  test('nenhum botão tem uma frase feita para enviar', () => {
+    // "Cria um PDF sobre inteligência artificial" criava um PDF que ninguém pediu.
+    const fs = require('fs');
+    const path = require('path');
+    const html = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'index.html'), 'utf8');
+    assert(!/capability-card"[^>]*data-action=/.test(html), 'um cartão ainda manda uma frase feita');
+  });
+
+  test('Criar PDF: o tema é o texto que o utilizador escreveu', () => {
+    const r = capacidades.resolver('pdf', '  Guia de boas-vindas para novos funcionários  ');
+    assertEqual(r.via, 'regra');
+    assertEqual(r.intencao.intent, 'create_pdf');
+    assertEqual(r.intencao.entities.topic, 'Guia de boas-vindas para novos funcionários');
+  });
+
+  test('Criar Projeto: vai para o plano, mesmo com palavras que enganavam as regras', () => {
+    // Medido: com um prefixo de texto, "uma agenda diária" caía em
+    // schedule_task por causa de "diária". A escolha não passa pelas regras.
+    const r = capacidades.resolver('projeto', 'uma agenda diária que abre com o computador');
+    assertEqual(r.intencao.intent, 'project_create');
+    assertEqual(r.intencao.entities.description, 'uma agenda diária que abre com o computador');
+  });
+
+  test('as funções de ferramentas levam a ferramenta certa à frente', () => {
+    assertEqual(capacidades.resolver('codigo', 'x').preferidas[0], 'executar_codigo');
+    assertEqual(capacidades.resolver('pesquisa', 'x').preferidas[0], 'pesquisar_web');
+    const f = capacidades.resolver('ficheiros', 'x').preferidas;
+    for (const nome of ['listar_ficheiros', 'ler_ficheiro', 'procurar_em_ficheiros', 'criar_nota']) {
+      assert(f.includes(nome), `ficheiros sem ${nome}`);
+    }
+  });
+
+  test('as ferramentas preferidas existem mesmo no catálogo', () => {
+    const tools = require('../orchestrator/tools');
+    for (const nome of Object.keys(capacidades.CAPACIDADES)) {
+      for (const f of capacidades.CAPACIDADES[nome].preferidas || []) {
+        assert(tools.porNome(f), `${nome} aponta para ${f}, que não existe`);
+      }
+    }
+  });
+
+  test('sem escolha, ou com uma que não existe, segue o caminho de sempre', () => {
+    assertEqual(capacidades.resolver(undefined, 'olá'), null);
+    assertEqual(capacidades.resolver('inventada', 'olá'), null);
+    assertEqual(capacidades.resolver('chat', 'olá').via, 'conversa');
+  });
+});
+
+
+describe('🧰 A ferramenta escolhida vai à frente', () => {
+  const tools = require('../orchestrator/tools');
+
+  test('mesmo sem uma palavra da frase a apontá-la', () => {
+    // Quem carregou em "Executar Código" e escreveu "quanto dá um crédito a 30
+    // anos" não disse "calcula", mas já tinha dito o que queria.
+    const nomes = tools.seleccionar('quanto dá um crédito a 30 anos', undefined, ['executar_codigo'])
+      .map(f => f.nome);
+    assertEqual(nomes[0], 'executar_codigo');
+  });
+
+  test('as preferidas não se repetem nem passam o tecto', () => {
+    const nomes = tools.seleccionar('le o ficheiro da pasta', undefined,
+      ['ler_ficheiro', 'ler_ficheiro', 'listar_ficheiros']).map(f => f.nome);
+    assertEqual(nomes.filter(n => n === 'ler_ficheiro').length, 1);
+    assert(nomes.length <= tools.MAX_FERRAMENTAS);
+  });
+
+  test('uma preferida que não existe é ignorada, não rebenta', () => {
+    const nomes = tools.seleccionar('olá', undefined, ['nao_existe']).map(f => f.nome);
+    assert(nomes.length > 0);
+    assert(!nomes.includes('nao_existe'));
+  });
+
+  test('sem preferidas, a escolha é a de sempre', () => {
+    const a = tools.seleccionar('pesquisa o preço do bitcoin').map(f => f.nome);
+    const b = tools.seleccionar('pesquisa o preço do bitcoin', undefined, []).map(f => f.nome);
+    assertEqual(a.join(','), b.join(','));
+  });
+});
 // ═══════════════════════════════════════════════════════════
 // RESULTADO FINAL
 // ═══════════════════════════════════════════════════════════

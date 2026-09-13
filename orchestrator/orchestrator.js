@@ -84,8 +84,16 @@ async function handlePrompt(prompt, context = {}) {
     });
     
     // Analisar intenção
-    // Smart intent parsing: regex primeiro, LLM fallback se ambíguo
-    const intentData = await intentParser.parseIntentSmart(prompt);
+    // Smart intent parsing: regex primeiro, LLM fallback se ambíguo.
+    //
+    // Quando o utilizador escolheu a função num botão, a intenção vem já
+    // decidida e não se adivinha. Sem isto, o texto que ele escreveu a seguir
+    // ficava à mercê de uma palavra solta: "uma agenda diária" caía em tarefas
+    // agendadas por causa de "diária". Ver orchestrator/capacidades.js.
+    const escolhida = context.intencao && typeof context.intencao.intent === 'string'
+      ? { entities: {}, ...context.intencao, confidence: 1, method: 'botao' }
+      : null;
+    const intentData = escolhida || await intentParser.parseIntentSmart(prompt);
     const classification = decisionEngine.classifyIntent(prompt);
     security.logAction(userId, 'intent-parsed', { 
       intent: intentData.intent,
@@ -96,7 +104,9 @@ async function handlePrompt(prompt, context = {}) {
     let response;
 
     // Verificar plugins primeiro (prioridade a extensões do utilizador)
-    const pluginMatch = pluginLoader.matchIntent(prompt);
+    // Com a função escolhida num botão, nem plugins nem decomposição em passos
+    // se sobrepõem ao que o utilizador pediu.
+    const pluginMatch = escolhida ? null : pluginLoader.matchIntent(prompt);
     if (pluginMatch) {
       console.log(`🔌 Plugin match: ${pluginMatch.plugin} → ${pluginMatch.intent}`);
       const pluginResult = await pluginLoader.executeHandler(pluginMatch, { userId, conversation });
@@ -114,7 +124,7 @@ async function handlePrompt(prompt, context = {}) {
     // ═══════════════════════════════════════════════════════════
     // Agent Chaining — Detectar e executar multi-passo
     // ═══════════════════════════════════════════════════════════
-    if (agentChaining.isMultiStep(prompt)) {
+    if (!escolhida && agentChaining.isMultiStep(prompt)) {
       console.log('🔗 Multi-step detectado — a decompor...');
       const steps = await agentChaining.decompose(prompt);
       
@@ -1321,7 +1331,11 @@ async function handlePrompt(prompt, context = {}) {
         // Agora o modelo pode escolher entre um punhado de ferramentas, e só
         // se isso não der nada é que se segue para o chat simples.
         try {
-          const comFerramentas = await toolLoop.correr(prompt, { userId, historico: history });
+          const comFerramentas = await toolLoop.correr(prompt, {
+            userId,
+            historico: history,
+            ferramentasPreferidas: context.ferramentasPreferidas
+          });
           if (comFerramentas && comFerramentas.texto) {
             response = comFerramentas.texto;
             if (comFerramentas.ferramentasUsadas.length) {

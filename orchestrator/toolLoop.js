@@ -76,7 +76,7 @@ function lerArgumentos(bruto) {
 async function correr(mensagem, contexto = {}) {
   if (!ACTIVO) return null;
 
-  const seleccionadas = tools.seleccionar(mensagem);
+  const seleccionadas = tools.seleccionar(mensagem, undefined, contexto.ferramentasPreferidas);
   if (!seleccionadas.length) return null;
 
   const esquemas = tools.paraFormatoOpenAI(seleccionadas);
@@ -176,7 +176,7 @@ async function correrComStream(mensagem, contexto = {}, saidas = {}) {
   const onToken = saidas.onToken || (() => {});
   const onProgresso = saidas.onProgresso || (() => {});
 
-  const seleccionadas = tools.seleccionar(mensagem);
+  const seleccionadas = tools.seleccionar(mensagem, undefined, contexto.ferramentasPreferidas);
   if (!seleccionadas.length) return null;
 
   const esquemas = tools.paraFormatoOpenAI(seleccionadas);

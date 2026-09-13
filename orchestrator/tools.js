@@ -415,7 +415,7 @@ function melhorComFerramentas(intent) {
  *
  * @returns {Array} subconjunto do catálogo, no máximo MAX_FERRAMENTAS
  */
-function seleccionar(mensagem, limite = MAX_FERRAMENTAS) {
+function seleccionar(mensagem, limite = MAX_FERRAMENTAS, preferidas = []) {
   const texto = normalizar(mensagem);
 
   const pontuadas = FERRAMENTAS
@@ -426,7 +426,20 @@ function seleccionar(mensagem, limite = MAX_FERRAMENTAS) {
     .filter(x => x.pontos > 0)
     .sort((a, b) => b.pontos - a.pontos);
 
-  const escolhidas = pontuadas.slice(0, limite).map(x => x.ferramenta);
+  // As que o utilizador escolheu num botão vão à frente de tudo, mesmo que a
+  // frase não tenha uma única palavra que as aponte. Quem carregou em
+  // "Executar Código" e escreveu "quanto dá 15% de 2300" não disse "calcula",
+  // mas já tinha dito o que queria.
+  const escolhidas = [];
+  for (const nome of preferidas || []) {
+    const f = porNome(nome);
+    if (f && !escolhidas.includes(f) && escolhidas.length < limite) escolhidas.push(f);
+  }
+
+  for (const { ferramenta } of pontuadas) {
+    if (escolhidas.length >= limite) break;
+    if (!escolhidas.includes(ferramenta)) escolhidas.push(ferramenta);
+  }
 
   // As básicas viajam sempre, mesmo quando outra pontuou.
   //

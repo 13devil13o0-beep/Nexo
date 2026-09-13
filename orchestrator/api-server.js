@@ -26,6 +26,7 @@ const { abrirBrowser } = require('./browser');
 const toolLoop = require('./toolLoop');
 const tools = require('./tools');
 const prazo = require('./prazo');
+const capacidades = require('./capacidades');
 
 // Deploy helper (wizard AWS)
 let deployHelper;
@@ -322,12 +323,21 @@ app.post('/api/chat', async (req, res) => {
     } catch {}
     
     // Contexto para o orchestrator
+    // A função escolhida num botão também vale por aqui. Para as que são
+    // ferramentas, força-se a conversa: é lá que o ciclo de ferramentas corre,
+    // e uma regra que casasse por acaso passava-lhe à frente.
+    const escolha = capacidades.resolver(req.body.capacidade, message);
+
     const enhancedContext = {
       ...context,
       source: 'api',
       conversationId,
       ragContext,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      intencao: escolha?.via === 'regra'
+        ? escolha.intencao
+        : escolha?.via === 'ferramentas' ? { intent: 'chat', entities: {} } : undefined,
+      ferramentasPreferidas: escolha?.preferidas
     };
     
     // Processar com orchestrator, com prazo. É este o caminho que a janela
@@ -947,6 +957,11 @@ async function handleWSMessage(clientId, message) {
         // guardava numa conversa e o da conversa noutra.
         const utilizador = utilizadorDaSessao();
 
+        // A função escolhida num botão da janela, se houver. Quem a escolheu
+        // já disse o que queria: as regras não voltam a adivinhar.
+        const escolhaBruta = capacidades.resolver(data.capacidade, data.message);
+        const escolha = escolhaBruta && escolhaBruta.via !== 'conversa' ? escolhaBruta : null;
+
         // Verificar intent via regex (instantâneo)
         const intentParser = require('./intentParser');
         const intentData = intentParser.parseIntent(data.message);
@@ -957,8 +972,11 @@ async function handleWSMessage(clientId, message) {
         // espera vive dentro do orchestrator. O caminho da conversa não sabia
         // dela: depois de ver o plano, quem escrevia "criar" recebia de volta
         // "o que gostaria de criar?" e o plano ficava para sempre pendurado.
-        const aguardaConfirmacao = router.temPlanoPendente(utilizador) &&
+        const aguardaConfirmacao = !escolha && router.temPlanoPendente(utilizador) &&
           (router.ehConfirmacaoDePlano(data.message) || router.ehRecusaDePlano(data.message));
+
+        const pelasRegras = !escolha &&
+          intentData.intent !== 'chat' && !tools.melhorComFerramentas(intentData.intent);
 
         // Se é um intent específico (não 'chat'), usar o router normal.
         //
@@ -966,15 +984,17 @@ async function handleWSMessage(clientId, message) {
         // acerta na intenção e erra nos argumentos: "lista os ficheiros da
         // pasta do projeto" virava uma busca pela pasta chamada "pasta". O
         // modelo lê a frase toda antes de decidir.
-        if (aguardaConfirmacao ||
-            (intentData.intent !== 'chat' && !tools.melhorComFerramentas(intentData.intent))) {
-          console.log(aguardaConfirmacao
-            ? '🔨 Há um plano à espera de resposta — a seguir pelo orchestrator.'
-            : `🎯 Intent detectado em stream: ${intentData.intent}`);
+        if (escolha?.via === 'regra' || aguardaConfirmacao || pelasRegras) {
+          console.log(escolha
+            ? `🧭 Função escolhida na janela: ${escolha.nome}`
+            : aguardaConfirmacao
+              ? '🔨 Há um plano à espera de resposta — a seguir pelo orchestrator.'
+              : `🎯 Intent detectado em stream: ${intentData.intent}`);
           const context = {
             userId: utilizador,
             source: 'websocket-stream',
-            conversationId: data.conversationId
+            conversationId: data.conversationId,
+            intencao: escolha?.intencao
           };
 
           // Com prazo: foi por aqui que o NEXO ficou mudo. A frase acabava em
@@ -1034,7 +1054,7 @@ async function handleWSMessage(clientId, message) {
         const comFerramentas = await prazo.comPrazo(
           toolLoop.correrComStream(
             data.message,
-            { userId: utilizador, historico: history },
+            { userId: utilizador, historico: history, ferramentasPreferidas: escolha?.preferidas },
             { onToken: enviaToken, onProgresso: enviaProgresso }
           ),
           prazo.PRAZO_PEDIDO_MS,

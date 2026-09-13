@@ -65,6 +65,139 @@ function wsBase() {
   return http.replace(/^http/, 'ws');
 }
 
+// ═══════════════════════════════════════════════════════════
+// AS SEIS FUNÇÕES DO ECRÃ DE BOAS-VINDAS
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * O que cada botão diz antes de fazer seja o que for.
+ *
+ * Os botões mandavam frases feitas ao NEXO. Carregar em "Criar PDF" criava um
+ * PDF sobre inteligência artificial, e "Criar Projeto" planeava uma app de
+ * tarefas, sem ninguém ter dito que queria isso. Agora cada botão explica o
+ * que a função faz, dá exemplos e pergunta. Só a resposta do utilizador põe
+ * alguma coisa a correr.
+ *
+ * Os textos são daqui, e não do modelo, de propósito: aparecem logo, não
+ * gastam a quota do fornecedor e dizem sempre a verdade sobre o que o NEXO
+ * consegue fazer nesta máquina.
+ *
+ * Os nomes (pdf, projeto, …) têm de bater certo com orchestrator/capacidades.js.
+ */
+const CAPACIDADES = {
+  chat: {
+    icone: '🧠',
+    titulo: 'IA Chat',
+    apresentacao:
+      '**Conversa comigo sobre o que quiseres.**\n\n' +
+      'Explico assuntos, escrevo e revejo textos, dou ideias, ajudo com código e com problemas técnicos. ' +
+      'Lembro-me do que dissemos nesta conversa, por isso podes ir afinando aos poucos.\n\n' +
+      'Sobre o que queres falar?',
+    exemplos: [
+      'Explica-me de forma simples como funciona ',
+      'Revê este texto e melhora a clareza: ',
+      'Dá-me cinco ideias para '
+    ],
+    marcador: 'Escreve a tua pergunta...'
+  },
+
+  pdf: {
+    icone: '📄',
+    titulo: 'Criar PDF',
+    apresentacao:
+      '**Escrevo um documento PDF completo sobre o tema que me deres.**\n\n' +
+      'Organizo-o com introdução, várias secções e conclusão, e guardo-o na pasta **Documentos** do NEXO.\n\n' +
+      'Para ficar como precisas, diz-me:\n' +
+      '- **o tema**\n' +
+      '- **para quem é**: alunos, clientes, uma reunião...\n' +
+      '- **o que não pode faltar**\n\n' +
+      'Sobre o que queres o documento?',
+    exemplos: [
+      'Guia de boas-vindas para novos funcionários, com regras da empresa e contactos úteis',
+      'Resumo da história de Portugal para alunos do 9.º ano',
+      'Relatório sobre '
+    ],
+    marcador: 'Tema do documento...',
+    rotulo: 'o próximo pedido cria um PDF'
+  },
+
+  pesquisa: {
+    icone: '🔍',
+    titulo: 'Pesquisa Web',
+    apresentacao:
+      '**Procuro na internet e resumo o que encontrar.**\n\n' +
+      'Serve para o que muda com o tempo e eu não posso saber de cor: notícias, preços, resultados, horários, novidades.\n\n' +
+      'Quanto mais concreto fores, melhor: diz o assunto e, se importar, o sítio ou a data.\n\n' +
+      'O que queres saber?',
+    exemplos: [
+      'Últimas notícias sobre ',
+      'Quanto custa hoje ',
+      'Qual é a previsão do tempo para '
+    ],
+    marcador: 'O que pesquisar...',
+    rotulo: 'o próximo pedido vai à internet'
+  },
+
+  codigo: {
+    icone: '💻',
+    titulo: 'Executar Código',
+    apresentacao:
+      '**Corro JavaScript numa caixa isolada e digo-te o resultado.**\n\n' +
+      'Serve para cálculos exatos, converter unidades e dados, e testar lógica. ' +
+      'Podes escrever o código ou só descrever o que queres calcular, que eu escrevo-o.\n\n' +
+      'Por segurança, a caixa não mexe nos teus ficheiros nem na internet, e pára ao fim de alguns segundos.\n\n' +
+      'O que queres calcular ou experimentar?',
+    exemplos: [
+      'Quanto dá um crédito de 150 000 € a 30 anos com juro de 3,5%?',
+      'Converte 72 °F para Celsius',
+      'Ordena estes números do maior para o menor: '
+    ],
+    marcador: 'Cálculo ou código...',
+    rotulo: 'o próximo pedido corre código'
+  },
+
+  ficheiros: {
+    icone: '📁',
+    titulo: 'Ficheiros',
+    apresentacao:
+      '**Trabalho com os ficheiros deste computador.**\n\n' +
+      '- **Listar** o que há numa pasta\n' +
+      '- **Ler** um ficheiro e explicar-te o que diz\n' +
+      '- **Procurar** uma palavra dentro de muitos ficheiros de uma vez\n' +
+      '- **Criar uma nota** com o texto que me deres\n\n' +
+      'Chego às pastas Documentos, Transferências e Ambiente de trabalho, e à pasta do NEXO. Ler não altera nada.\n\n' +
+      'Que pasta ou ficheiro queres ver?',
+    exemplos: [
+      'Que ficheiros tenho na pasta Transferências?',
+      'Procura onde aparece a palavra "fatura" nos meus Documentos',
+      'Cria uma nota com a lista de compras: '
+    ],
+    marcador: 'Pasta ou ficheiro...',
+    rotulo: 'o próximo pedido usa os teus ficheiros'
+  },
+
+  projeto: {
+    icone: '🏗️',
+    titulo: 'Criar Projeto',
+    apresentacao:
+      '**Monto uma aplicação ou site completo a partir da tua ideia.**\n\n' +
+      'Primeiro mostro-te o **plano**: as tecnologias e cada ficheiro que vou criar, com o que faz. ' +
+      'Não construo nada até tu dizeres **"criar"**. Se o plano não for bem o que querias, ' +
+      'carrega outra vez em Criar Projeto e descreve com os ajustes.\n\n' +
+      'O projeto fica na pasta **outputs/projects** do NEXO.\n\n' +
+      'Para acertar à primeira, diz-me o que a app deve fazer, para quem é, e onde vai correr: ' +
+      'no navegador, no computador ou no telemóvel.\n\n' +
+      'O que queres construir?',
+    exemplos: [
+      'Uma agenda que abre com o computador e mostra as tarefas de ontem que ficaram por fazer',
+      'Um site simples para o meu negócio, com página de contactos',
+      'Uma app para '
+    ],
+    marcador: 'Descreve a tua ideia...',
+    rotulo: 'o próximo pedido planeia um projeto'
+  }
+};
+
 class MyBotApp {
   constructor() {
     this.apiUrl = apiBase();
@@ -556,14 +689,11 @@ class MyBotApp {
   }
   
   setupQuickActions() {
-    // Capability cards
+    // As seis funções: apresentam-se e perguntam. Não mandam nada ao NEXO.
     document.querySelectorAll('.capability-card').forEach(card => {
       card.addEventListener('click', () => {
-        const action = card.dataset.action;
-        if (action) {
-          this.elements.messageInput.value = action;
-          this.sendMessage();
-        }
+        const nome = card.dataset.capacidade;
+        if (nome) this.apresentarCapacidade(nome);
       });
     });
     
@@ -626,6 +756,122 @@ class MyBotApp {
     });
   }
   
+  // ═══════════════════════════════════════════════════════════
+  // UMA FUNÇÃO ESCOLHIDA NUM BOTÃO
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * Apresenta a função e fica à espera do que o utilizador quer com ela.
+   *
+   * Nada vai para o NEXO aqui. A mensagem de apresentação é local, os
+   * exemplos só preenchem a caixa de escrita, e a função escolhida viaja com
+   * a PRÓXIMA mensagem que o utilizador enviar. É essa que decide o que se faz.
+   */
+  apresentarCapacidade(nome) {
+    const cap = CAPACIDADES[nome];
+    if (!cap) return;
+
+    this.elements.welcomeScreen.classList.add('hidden');
+    this._coladoAoFundo = true;
+
+    this.addMessage('bot', `${cap.icone} ${cap.apresentacao}`);
+
+    // Os exemplos vão por baixo da apresentação, como sugestões para pegar.
+    const bots = this.elements.messagesContainer.querySelectorAll('.message.bot');
+    const balao = bots[bots.length - 1];
+    const conteudo = balao?.querySelector('.message-content');
+    if (conteudo && cap.exemplos?.length) {
+      const lista = document.createElement('div');
+      lista.className = 'exemplos-capacidade';
+      for (const exemplo of cap.exemplos) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'exemplo-chip';
+        // Um exemplo que acaba em espaço é para completar: mostra-se com "…".
+        chip.textContent = /\s$/.test(exemplo) ? `${exemplo.trim()}…` : exemplo;
+        // Um exemplo não se envia: vai para a caixa de escrita, para o
+        // utilizador o acabar ou mudar com o que realmente precisa.
+        chip.addEventListener('click', () => this.usarExemplo(exemplo));
+        lista.appendChild(chip);
+      }
+      conteudo.appendChild(lista);
+    }
+
+    this.activarCapacidade(nome);
+    this.acompanharFundo();
+  }
+
+  usarExemplo(exemplo) {
+    const caixa = this.elements.messageInput;
+    caixa.value = exemplo;
+    caixa.focus();
+    caixa.setSelectionRange(caixa.value.length, caixa.value.length);
+    caixa.dispatchEvent(new Event('input'));
+  }
+
+  /**
+   * Marca a função para a próxima mensagem, e mostra-o por cima da caixa.
+   *
+   * Tem de se ver. Se a escolha ficasse escondida, alguém que carregou em
+   * "Criar PDF" e depois mudou de ideias escrevia outra coisa e recebia um
+   * PDF sem perceber porquê. Com o aviso à vista, e um ✕ para desistir, sabe
+   * sempre o que vai acontecer quando carregar em Enter.
+   */
+  activarCapacidade(nome) {
+    const cap = CAPACIDADES[nome];
+    const caixa = this.elements.messageInput;
+
+    if (this._marcadorOriginal === undefined) this._marcadorOriginal = caixa.placeholder;
+    caixa.placeholder = cap.marcador || this._marcadorOriginal;
+    caixa.focus();
+
+    // A conversa normal não precisa de aviso: é o que já acontece sempre.
+    if (nome === 'chat') {
+      this._capacidadeActiva = null;
+      this.removerAvisoDeCapacidade();
+      return;
+    }
+
+    this._capacidadeActiva = nome;
+
+    let aviso = document.getElementById('avisoCapacidade');
+    if (!aviso) {
+      aviso = document.createElement('div');
+      aviso.id = 'avisoCapacidade';
+      aviso.className = 'aviso-capacidade';
+
+      const texto = document.createElement('span');
+      texto.className = 'aviso-capacidade-texto';
+      aviso.appendChild(texto);
+
+      const fechar = document.createElement('button');
+      fechar.type = 'button';
+      fechar.className = 'aviso-capacidade-fechar';
+      fechar.title = 'Voltar à conversa normal';
+      fechar.textContent = '✕';
+      fechar.addEventListener('click', () => this.desactivarCapacidade());
+      aviso.appendChild(fechar);
+
+      const contentor = this.elements.messageInput.closest('.input-container');
+      contentor.parentNode.insertBefore(aviso, contentor);
+    }
+
+    aviso.querySelector('.aviso-capacidade-texto').textContent =
+      `${cap.icone} ${cap.titulo} — ${cap.rotulo}`;
+  }
+
+  desactivarCapacidade() {
+    this._capacidadeActiva = null;
+    this.removerAvisoDeCapacidade();
+    if (this._marcadorOriginal !== undefined) {
+      this.elements.messageInput.placeholder = this._marcadorOriginal;
+    }
+  }
+
+  removerAvisoDeCapacidade() {
+    document.getElementById('avisoCapacidade')?.remove();
+  }
+
   // ═══════════════════════════════════════════════════════════
   // A RESPOSTA A CHEGAR: SEM CINTILAR E SEM FICAR PENDURADA
   // ═══════════════════════════════════════════════════════════
@@ -693,9 +939,9 @@ class MyBotApp {
       repetir.className = 'msg-action-btn repetir-btn';
       repetir.textContent = '🔄 Tentar outra vez';
       repetir.addEventListener('click', () => {
-        const { texto, ficheiro } = this._ultimoEnvio;
+        const { texto, ficheiro, capacidade } = this._ultimoEnvio;
         div.remove();
-        this.sendTextMessage(texto, ficheiro);
+        this.sendTextMessage(texto, ficheiro, capacidade || null);
       });
       content.appendChild(repetir);
     }
@@ -1311,22 +1557,32 @@ class MyBotApp {
   /**
    * Envia apenas mensagem de texto (sem ficheiro)
    */
-  async sendTextMessage(text, ficheiro = null) {
+  async sendTextMessage(text, ficheiro = null, capacidadeARepetir = undefined) {
     // Adicionar mensagem do utilizador (se ainda não foi adicionada)
     if (!this.pendingFile) {
       this.addMessage('user', text);
     }
 
+    // A função escolhida num botão vale para esta mensagem e só para esta.
+    // Depois a conversa volta ao normal, sem ninguém ter de se lembrar de a
+    // desligar. O repetir guarda-a, para repetir exactamente o mesmo pedido.
+    const capacidade = capacidadeARepetir !== undefined
+      ? capacidadeARepetir
+      : (this._capacidadeActiva || null);
+    if (this._capacidadeActiva) this.desactivarCapacidade();
+
     // Guardado para o botão de repetir, quando a resposta não chega.
-    this._ultimoEnvio = { texto: text, ficheiro };
+    this._ultimoEnvio = { texto: text, ficheiro, capacidade };
 
     // Quem acaba de enviar quer ver o que enviou, mesmo que estivesse a ler
     // mais acima. É o único momento em que se força a descida.
     this._coladoAoFundo = true;
     this.acompanharFundo();
 
-    // Decidir se usa streaming (chat simples) ou rota normal (comandos)
-    const isCommand = /^(executa|run:|listar|cria um pdf|status|ajuda|help)/i.test(text);
+    // Decidir se usa streaming (chat simples) ou rota normal (comandos).
+    // Com uma função escolhida não há adivinhas: vai sempre pelo streaming,
+    // que é onde o servidor sabe ler a escolha.
+    const isCommand = !capacidade && /^(executa|run:|listar|cria um pdf|status|ajuda|help)/i.test(text);
 
     // Enviar para o Core
     try {
@@ -1348,7 +1604,8 @@ class MyBotApp {
             data: {
               message: text,
               conversationId: this.currentConversationId,
-              ficheiro
+              ficheiro,
+              capacidade
             }
           }));
         } else {
@@ -1375,7 +1632,8 @@ class MyBotApp {
           body: JSON.stringify({
             message: text,
             conversationId: this.currentConversationId,
-            ficheiro
+            ficheiro,
+            capacidade
           }),
           signal: AbortSignal.timeout(MyBotApp.ESPERA_MAXIMA_MS * 2)
         });
@@ -1570,6 +1828,8 @@ class MyBotApp {
   }
 
   startNewConversation() {
+    // Uma conversa nova começa sem nenhuma função escolhida para trás.
+    this.desactivarCapacidade();
     this.currentConversationId = null;
     this.elements.messagesContainer.innerHTML = '';
     this.elements.welcomeScreen.classList.remove('hidden');

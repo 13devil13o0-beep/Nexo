@@ -971,6 +971,78 @@ body {
   flex-shrink: 0;
 }
 
+/* ═══ Função escolhida num botão ═══
+   Fica à vista por cima da caixa de escrita, para quem carregou em "Criar
+   PDF" saber sempre o que o Enter vai fazer, e poder desistir no ✕. */
+.aviso-capacidade {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px 6px 12px;
+  margin-bottom: 8px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--text-primary);
+  animation: slideIn 0.2s ease;
+}
+
+.aviso-capacidade-texto {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.aviso-capacidade-fechar {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.aviso-capacidade-fechar:hover {
+  background: rgba(255, 107, 107, 0.2);
+  color: var(--error);
+}
+
+/* Exemplos por baixo da apresentação: pegam-se, não se enviam. */
+.exemplos-capacidade {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.exemplo-chip {
+  max-width: 100%;
+  padding: 5px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: all var(--transition);
+}
+
+.exemplo-chip:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* Attachment Preview */
 .attachment-preview {
   display: flex;
