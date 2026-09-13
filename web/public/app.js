@@ -1550,8 +1550,17 @@ class MyBotApp {
       </div>
     `;
     
+    // O texto vem do próprio balão, não do estado do streaming.
+    //
+    // Lia this._streamingText no momento do clique, e isso é esvaziado mal a
+    // resposta acaba. Como quase todas as respostas passaram a vir por
+    // streaming, o botão copiava uma string vazia para a área de
+    // transferência — e ainda mostrava "Copiado!".
     messageDiv.querySelector('.copy-btn').addEventListener('click', () => {
-      this.copyToClipboard(this._streamingText || '');
+      const texto = typeof messageDiv._textoOriginal === 'string'
+        ? messageDiv._textoOriginal
+        : (this._streamingDiv === messageDiv ? this._streamingText : '');
+      this.copyToClipboard(texto || '');
     });
     
     this.elements.messagesContainer.appendChild(messageDiv);
@@ -1891,6 +1900,12 @@ class MyBotApp {
   // ═══════════════════════════════════════════════════════════
   
   async copyToClipboard(text) {
+    // Dizer "Copiado!" sem ter copiado nada foi o que escondeu a avaria do
+    // botão: o aviso aparecia e a área de transferência ficava vazia.
+    if (!text || !String(text).trim()) {
+      this.showToast('Não há nada para copiar nesta mensagem', 'info');
+      return;
+    }
     try {
       if (window.electronAPI) {
         await window.electronAPI.copyToClipboard(text);
