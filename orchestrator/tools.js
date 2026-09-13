@@ -28,6 +28,8 @@ const pdfAgent = require('../agents/pdfAgent');
 const fileAgent = require('../agents/fileAgent');
 const codeRunner = require('../agents/codeRunner');
 const systemAgent = require('../agents/systemAgent');
+const desempenhoAgent = require('../agents/desempenhoAgent');
+const accoesPendentes = require('./accoesPendentes');
 const clipboardAgent = require('../agents/clipboardAgent');
 const visionAgent = require('../agents/visionAgent');
 const smartMemory = require('../memory/smartMemory');
@@ -58,6 +60,24 @@ function comoTexto(valor) {
     return JSON.stringify(valor);
   }
   return String(valor);
+}
+
+/** Sem saber a quem pedir confirmação, nem vale a pena preparar. */
+function semUtilizador(contexto) {
+  return contexto?.userId ? null : 'NÃO FOI PREPARADA NENHUMA ACÇÃO: não sei a que utilizador pedir confirmação.';
+}
+
+/**
+ * Transforma uma acção preparada numa proposta à espera de confirmação.
+ *
+ * Se a preparação não deu (programa protegido, nada para limpar, precisa de
+ * administrador), o modelo recebe o motivo e não fica nada à espera.
+ */
+function proporAccao(contexto, preparada) {
+  if (!preparada || !preparada.success) {
+    return `NÃO FOI PREPARADA NENHUMA ACÇÃO. ${preparada?.error || 'Motivo desconhecido.'}`;
+  }
+  return accoesPendentes.propor(contexto.userId, preparada).texto;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -198,6 +218,77 @@ const FERRAMENTAS = [
     descricao: 'Devolve o estado da máquina: sistema operativo, processador, memória e tempo ligado.',
     parametros: { type: 'object', properties: {}, required: [], additionalProperties: false },
     executar: async () => comoTexto(systemAgent.getSystemInfo())
+  },
+
+  // ═══ Desempenho do PC ═══════════════════════════════════
+  //
+  // "O pc está muito lento, faz uma revisão" recebia conselhos genéricos: a
+  // ferramenta do sistema não era enviada, porque "pc", "lento" e "otimizar"
+  // não estavam nas palavras, e mesmo que fosse só dizia o processador e a
+  // memória total. Estas medem a sério e propõem.
+  //
+  // As palavras curtas vão sempre com outra ao lado ("o pc", "meu pc"): o
+  // pré-filtro procura texto dentro da frase, e "pc" sozinho apanhava "opção".
+
+  {
+    nome: 'rever_desempenho',
+    risco: 'ler',
+    palavras: ['lento', 'lenta', 'lentidao', 'pesado', 'trava', 'bloqueia', 'encrava', 'desempenho',
+               'performance', 'otimiza', 'optimiza', 'otimizar', 'optimizar', 'acelera', 'mais rapido',
+               'o pc', 'meu pc', 'nosso pc', 'do pc', 'computador', 'processos', 'memoria', 'processador',
+               'arranque', 'consome', 'consumo'],
+    descricao: 'Faz uma revisão real do desempenho do PC: uso do processador e da memória medidos agora, os programas que mais pesam, espaço em disco e se é SSD, programas que arrancam com o Windows, temporários e plano de energia. Só lê, não muda nada. Usa-a antes de sugerires qualquer otimização, e baseia as sugestões no que ela encontrar.',
+    parametros: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    executar: async () => comoTexto(await desempenhoAgent.rever())
+  },
+
+  // As três seguintes NÃO mudam nada quando o modelo as chama. Preparam a
+  // acção e deixam-na à espera de um "sim" do utilizador, uma de cada vez.
+  // Quem a executa é o servidor, ver orchestrator/accoesPendentes.js. Por isso
+  // chamá-las é leitura: a autorização é a confirmação explícita.
+
+  {
+    nome: 'preparar_fecho_programa',
+    risco: 'ler',
+    palavras: ['fecha', 'fechar', 'fecho', 'encerra', 'encerrar', 'termina o programa', 'mata o processo',
+               'otimiza', 'optimiza', 'lento', 'pesado', 'processos'],
+    descricao: 'Prepara o fecho de um programa aberto, pelo nome exacto que aparece na revisão. Não fecha nada: fica à espera que o utilizador confirme. Por omissão pede ao programa que feche como se se carregasse no X. Programas do Windows, o antivírus e o próprio NEXO nunca são propostos.',
+    parametros: {
+      type: 'object',
+      properties: {
+        programa: { type: 'string', description: 'Nome do programa tal como aparece na revisão, por exemplo "chrome".' },
+        forcar: { type: 'boolean', description: 'Forçar o fecho. Só se o utilizador pedir: trabalho por guardar perde-se.' }
+      },
+      required: ['programa'],
+      additionalProperties: false
+    },
+    executar: async (args, ctx) => semUtilizador(ctx) || proporAccao(ctx, await desempenhoAgent.prepararFecho(args))
+  },
+
+  {
+    nome: 'preparar_limpeza_temporarios',
+    risco: 'ler',
+    palavras: ['temporarios', 'limpa', 'limpar', 'limpeza', 'espaco', 'disco cheio', 'otimiza', 'optimiza', 'lento'],
+    descricao: 'Prepara a limpeza dos ficheiros temporários com mais de um dia. Não apaga nada: fica à espera que o utilizador confirme. Só mexe na pasta de temporários.',
+    parametros: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    executar: async (args, ctx) => semUtilizador(ctx) || proporAccao(ctx, await desempenhoAgent.prepararLimpezaTemporarios())
+  },
+
+  {
+    nome: 'preparar_arranque',
+    risco: 'ler',
+    palavras: ['arranque', 'arranca', 'inicia com o windows', 'abre sozinho', 'startup', 'otimiza', 'optimiza', 'lento'],
+    descricao: 'Prepara desligar (ou voltar a ligar) um programa do arranque do Windows, pelo nome que aparece na revisão. Não muda nada: fica à espera que o utilizador confirme. O programa continua instalado.',
+    parametros: {
+      type: 'object',
+      properties: {
+        programa: { type: 'string', description: 'Nome tal como aparece na lista de arranque da revisão.' },
+        ligar: { type: 'boolean', description: 'true para voltar a ligar. Por omissão desliga.' }
+      },
+      required: ['programa'],
+      additionalProperties: false
+    },
+    executar: async (args, ctx) => semUtilizador(ctx) || proporAccao(ctx, await desempenhoAgent.prepararArranque(args))
   },
 
   {
@@ -342,6 +433,10 @@ const EM_CURSO = {
   listar_ficheiros: '📁 a ver os teus ficheiros',
   ler_ficheiro: '📖 a ler o ficheiro',
   procurar_em_ficheiros: '🔎 a procurar no código',
+  rever_desempenho: '🩺 a rever o desempenho do PC',
+  preparar_fecho_programa: '✋ a preparar o fecho (vou pedir confirmação)',
+  preparar_limpeza_temporarios: '✋ a preparar a limpeza (vou pedir confirmação)',
+  preparar_arranque: '✋ a preparar a mudança no arranque (vou pedir confirmação)',
   info_sistema: '🖥️ a ver o estado da máquina',
   ver_area_transferencia: '📋 a ver a área de transferência',
   analisar_ecra: '👁️ a olhar para o ecrã',
@@ -382,6 +477,12 @@ const INTENCOES_COM_FERRAMENTA = new Set([
   'run_code',
   'list_files',
   'system_info',
+  'system_list_processes',
+  // A regra de fechar processos usava "taskkill /IM nome* /F": curinga e
+  // força, sem perguntar. "fecha o chrome" fechava tudo o que começasse por
+  // "chrome" e perdia o que estivesse por guardar. Passa a ir pela ferramenta
+  // que prepara o fecho e espera por um "sim".
+  'system_kill_process',
   'system_list_dir',
   'system_read_file',
   'system_open_folder',
@@ -403,6 +504,40 @@ function melhorComFerramentas(intent) {
   return INTENCOES_COM_FERRAMENTA.has(intent);
 }
 
+/**
+ * A ferramenta que corresponde a uma intenção que as regras já reconheceram.
+ *
+ * As regras cedem o pedido ao modelo, mas já sabiam o que ele era. Deitar essa
+ * informação fora deixava a escolha da ferramenta entregue às palavras da
+ * frase. Medido: "força o fecho do programa nexoteste" foi reconhecido como
+ * fechar um processo, mas "fecho" não estava nas palavras da ferramenta, e o
+ * modelo respondeu que não conseguia fechar programas.
+ */
+const FERRAMENTA_DA_INTENCAO = {
+  web_search: 'pesquisar_web',
+  run_code: 'executar_codigo',
+  list_files: 'listar_ficheiros',
+  system_info: 'info_sistema',
+  system_list_processes: 'rever_desempenho',
+  system_kill_process: 'preparar_fecho_programa',
+  system_list_dir: 'listar_ficheiros',
+  system_read_file: 'ler_ficheiro',
+  system_open_folder: 'listar_ficheiros',
+  current_time: 'data_e_hora',
+  current_date: 'data_e_hora',
+  recall: 'recordar',
+  rag_search: 'pesquisar_documentos',
+  clipboard_current: 'ver_area_transferencia',
+  screenshot_analyze: 'analisar_ecra',
+  screen_ocr: 'analisar_ecra',
+  screen_errors: 'analisar_ecra'
+};
+
+function ferramentasDaIntencao(intent) {
+  const nome = FERRAMENTA_DA_INTENCAO[intent];
+  return nome ? [nome] : [];
+}
+
 // ═══════════════════════════════════════════════════════════
 // PRÉ-FILTRO
 // ═══════════════════════════════════════════════════════════
@@ -415,7 +550,7 @@ function melhorComFerramentas(intent) {
  *
  * @returns {Array} subconjunto do catálogo, no máximo MAX_FERRAMENTAS
  */
-function seleccionar(mensagem, limite = MAX_FERRAMENTAS, preferidas = []) {
+function seleccionar(mensagem, limite = MAX_FERRAMENTAS, preferidas = [], contextoRecente = '') {
   const texto = normalizar(mensagem);
 
   const pontuadas = FERRAMENTAS
@@ -439,6 +574,24 @@ function seleccionar(mensagem, limite = MAX_FERRAMENTAS, preferidas = []) {
   for (const { ferramenta } of pontuadas) {
     if (escolhidas.length >= limite) break;
     if (!escolhidas.includes(ferramenta)) escolhidas.push(ferramenta);
+  }
+
+  // O que se estava a falar conta, logo a seguir ao que a mensagem pede.
+  //
+  // Depois de uma revisão do PC, "sim, continua" ou "e o Chrome?" não têm
+  // uma única palavra que aponte para as ferramentas de desempenho. Sem olhar
+  // para as últimas mensagens, o NEXO ficava sem elas a meio do trabalho e
+  // respondia que não conseguia fazer o que tinha acabado de propor.
+  if (contextoRecente) {
+    const recente = normalizar(contextoRecente);
+    const doContexto = FERRAMENTAS
+      .map(f => ({ f, pontos: f.palavras.reduce((n, p) => n + (recente.includes(normalizar(p)) ? 1 : 0), 0) }))
+      .filter(x => x.pontos > 0)
+      .sort((a, b) => b.pontos - a.pontos);
+    for (const { f } of doContexto) {
+      if (escolhidas.length >= limite) break;
+      if (!escolhidas.includes(f)) escolhidas.push(f);
+    }
   }
 
   // As básicas viajam sempre, mesmo quando outra pontuou.
@@ -519,6 +672,8 @@ module.exports = {
   emCurso,
   EM_CURSO,
   melhorComFerramentas,
+  ferramentasDaIntencao,
+  FERRAMENTA_DA_INTENCAO,
   INTENCOES_COM_FERRAMENTA,
   MAX_FERRAMENTAS
 };

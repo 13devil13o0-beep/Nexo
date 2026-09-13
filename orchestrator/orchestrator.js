@@ -32,6 +32,13 @@ const i18n = require('../i18n/i18n');
 const toolLoop = require('./toolLoop');
 const tools = require('./tools');
 const permissions = require('./permissions');
+const accoesPendentes = require('./accoesPendentes');
+const desempenhoAgent = require('../agents/desempenhoAgent');
+
+/** O nome do programa como veio da frase, sem pontuação à volta. */
+function semAcentosNemPontuacao(texto) {
+  return String(texto || '').trim().replace(/^["'«]+|["'».,!?]+$/g, '').trim();
+}
 
 // Carregar plugins ao iniciar
 pluginLoader.loadAll();
@@ -77,12 +84,49 @@ async function handlePrompt(prompt, context = {}) {
     }
     
     // Log da ação
-    security.logAction(userId, 'prompt-received', { 
+    security.logAction(userId, 'prompt-received', {
       prompt: prompt.substring(0, 100),
       source: context.source || 'unknown',
       conversationId: conversation.id
     });
-    
+
+    // ═══ Uma acção no PC à espera de "sim" ou "não" ═══
+    //
+    // Resolve-se antes de qualquer interpretação da mensagem. Um "sim" solto
+    // passaria pelo classificador com IA, que o podia mandar para outro lado,
+    // e a acção ficava pendurada. A acção corre aqui, pelo servidor, e nunca
+    // pelo modelo. Ver orchestrator/accoesPendentes.js.
+    //
+    // O "sim" só vale se for a resposta imediata à proposta. Se a conversa
+    // seguiu para outra coisa, a acção caduca em silêncio. Sem isto, o NEXO
+    // propunha fechar o Chrome, a pessoa perguntava outra coisa, respondia
+    // "sim" a uma pergunta diferente, e o Chrome fechava.
+    if (accoesPendentes.tem(userId)) {
+      let resposta = null;
+      if (!context.intencao && ehConfirmacaoDePlano(prompt)) {
+        security.logAction(userId, 'pc-action-confirmed', { accao: accoesPendentes.obter(userId)?.titulo });
+        resposta = await accoesPendentes.confirmar(userId);
+      } else if (!context.intencao && ehRecusaDePlano(prompt)) {
+        resposta = accoesPendentes.cancelar(userId);
+      } else {
+        accoesPendentes.cancelar(userId);
+      }
+
+      if (resposta) {
+        conversationStore.addMessage(conversation.id, { role: 'assistant', content: resposta });
+        const prefsAccao = conversationStore.getPreferences();
+        const saidaAccao = decisionEngine.decideOutputMode(resposta, prefsAccao.defaultMode);
+        return {
+          text: resposta,
+          outputMode: saidaAccao.mode,
+          shouldSpeak: saidaAccao.shouldSpeak,
+          speakableText: saidaAccao.shouldSpeak ? decisionEngine.prepareForTTS(resposta) : null,
+          conversationId: conversation.id,
+          elapsed: Date.now() - startTime
+        };
+      }
+    }
+
     // Analisar intenção
     // Smart intent parsing: regex primeiro, LLM fallback se ambíguo.
     //
@@ -406,18 +450,30 @@ async function handlePrompt(prompt, context = {}) {
         }
         break;
         
-      case 'system_kill_process':
-        const procIdentifier = intentData.entities.identifier;
+      case 'system_kill_process': {
+        // Já não fecha logo. Esta regra fazia "taskkill /IM nome* /F": curinga
+        // e força, sem perguntar, e "fecha o chrome" fechava tudo o que
+        // começasse por chrome, com o que estivesse por guardar. Agora prepara
+        // e espera pelo "sim", como as outras acções no PC, por qualquer canal:
+        // janela, API, Telegram ou linha de comandos.
+        const procIdentifier = semAcentosNemPontuacao(intentData.entities.identifier);
         if (!procIdentifier) {
           response = t('system.kill_process.missing');
-        } else {
-          console.log(`💀 Terminando processo: ${procIdentifier}`);
-          const killResult = await systemAgent.killProcess(procIdentifier);
-          response = killResult.success 
-            ? t('system.kill_process.success', { identifier: procIdentifier })
-            : `❌ ${killResult.error}`;
+          break;
         }
+        const preparada = await desempenhoAgent.prepararFecho({
+          programa: procIdentifier.replace(/^(?:o|a|os|as|programa|processo)\s+/i, '').split(/\s+/)[0]
+        });
+        if (!preparada.success) {
+          response = `❌ ${preparada.error}`;
+          break;
+        }
+        const proposta = accoesPendentes.propor(userId, preparada);
+        response = proposta.ok
+          ? `✋ ${preparada.descricao}\n\nConfirmas? Responde **sim** para avançar ou **não** para cancelar.`
+          : `✋ Já há uma acção à espera de resposta: "${accoesPendentes.obter(userId)?.titulo}". Responde primeiro a essa.`;
         break;
+      }
         
       case 'system_list_windows':
         console.log(`🪟 Listando janelas abertas`);
@@ -607,8 +663,11 @@ async function handlePrompt(prompt, context = {}) {
         if (!planResult.success) {
           response = planResult.error;
         } else {
-          // Guardar plano na conversa para confirmação futura
+          // Guardar plano na conversa para confirmação futura, com a hora:
+          // um plano esquecido não pode ser construído por um "sim" dito
+          // muito depois a outra coisa. Ver planoPendente().
           conversation._pendingPlan = planResult.plan;
+          conversation._pendingPlanEm = Date.now();
           response = planResult.summary;
         }
         break;
@@ -1308,16 +1367,19 @@ async function handlePrompt(prompt, context = {}) {
       case 'chat':
       default:
         // Verificar se há um plano de projeto pendente e o user confirmou
+        planoPendente(conversation); // deita fora um plano caducado antes de olhar para ele
         if (conversation._pendingPlan && ehConfirmacaoDePlano(prompt)) {
           console.log('🔨 Utilizador confirmou – a construir projeto...');
           const buildResult = await projectBuilder.buildProject(conversation._pendingPlan);
           delete conversation._pendingPlan;
+          delete conversation._pendingPlanEm;
           response = projectBuilder.formatBuildResult(buildResult);
           break;
         }
         // Cancelar plano pendente se user disser não
         if (conversation._pendingPlan && ehRecusaDePlano(prompt)) {
           delete conversation._pendingPlan;
+          delete conversation._pendingPlanEm;
           response = t('project.cancelled');
           break;
         }
@@ -1783,10 +1845,32 @@ function ehRecusaDePlano(prompt) {
 function temPlanoPendente(userId) {
   try {
     const conversa = conversationStore.getOrCreateConversation(userId);
-    return !!(conversa && conversa._pendingPlan);
+    return !!planoPendente(conversa);
   } catch {
     return false;
   }
+}
+
+/**
+ * Quanto tempo um plano de projecto espera por resposta.
+ *
+ * Não esperava para sempre, e ainda por cima era gravado em disco com a
+ * conversa. Medido: um "sim" dado a outra coisa, horas depois e já com o NEXO
+ * reiniciado, construiu um projecto "todo-list" que ninguém tinha pedido
+ * naquele momento. Meia hora chega para ler o plano e pensar nele.
+ */
+const VALIDADE_PLANO_MS = 30 * 60 * 1000;
+
+/** O plano à espera, ou null. Um plano caducado ou sem hora é deitado fora. */
+function planoPendente(conversa, agora = Date.now()) {
+  if (!conversa || !conversa._pendingPlan) return null;
+  const em = Number(conversa._pendingPlanEm) || 0;
+  if (!em || agora - em > VALIDADE_PLANO_MS) {
+    delete conversa._pendingPlan;
+    delete conversa._pendingPlanEm;
+    return null;
+  }
+  return conversa._pendingPlan;
 }
 
 module.exports = {
@@ -1794,6 +1878,8 @@ module.exports = {
   temPlanoPendente,
   ehConfirmacaoDePlano,
   ehRecusaDePlano,
+  planoPendente,
+  VALIDADE_PLANO_MS,
   getSystemInfo,
   getAgentsList,
   getHelpMessage

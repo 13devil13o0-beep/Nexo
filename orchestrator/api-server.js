@@ -27,6 +27,7 @@ const toolLoop = require('./toolLoop');
 const tools = require('./tools');
 const prazo = require('./prazo');
 const capacidades = require('./capacidades');
+const accoesPendentes = require('./accoesPendentes');
 
 // Deploy helper (wizard AWS)
 let deployHelper;
@@ -972,8 +973,18 @@ async function handleWSMessage(clientId, message) {
         // espera vive dentro do orchestrator. O caminho da conversa não sabia
         // dela: depois de ver o plano, quem escrevia "criar" recebia de volta
         // "o que gostaria de criar?" e o plano ficava para sempre pendurado.
-        const aguardaConfirmacao = !escolha && router.temPlanoPendente(utilizador) &&
+        // O mesmo para uma acção no PC preparada pelo NEXO: o "sim" que a
+        // aprova é tratado pelo orchestrator, que a executa ele próprio.
+        const aguardaConfirmacao = !escolha &&
+          (router.temPlanoPendente(utilizador) || accoesPendentes.tem(utilizador)) &&
           (router.ehConfirmacaoDePlano(data.message) || router.ehRecusaDePlano(data.message));
+
+        // Uma acção no PC só se confirma com a mensagem logo a seguir à
+        // proposta. Se esta mensagem não é a resposta a ela, caduca: um "sim"
+        // mais tarde, dito a outra pergunta, não pode fechar programas.
+        if (accoesPendentes.tem(utilizador) && !aguardaConfirmacao) {
+          accoesPendentes.cancelar(utilizador);
+        }
 
         const pelasRegras = !escolha &&
           intentData.intent !== 'chat' && !tools.melhorComFerramentas(intentData.intent);
@@ -1054,7 +1065,12 @@ async function handleWSMessage(clientId, message) {
         const comFerramentas = await prazo.comPrazo(
           toolLoop.correrComStream(
             data.message,
-            { userId: utilizador, historico: history, ferramentasPreferidas: escolha?.preferidas },
+            {
+              userId: utilizador,
+              historico: history,
+              // A escolha do botão manda; senão, a ferramenta que a regra já reconheceu.
+              ferramentasPreferidas: escolha?.preferidas || tools.ferramentasDaIntencao(intentData.intent)
+            },
             { onToken: enviaToken, onProgresso: enviaProgresso }
           ),
           prazo.PRAZO_PEDIDO_MS,

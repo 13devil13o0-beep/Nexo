@@ -47,9 +47,24 @@ Não uses ferramentas para conhecimento geral que já tens. Responde directament
 Se uma ferramenta falhar ou não te der o que precisas, diz o que tentaste e o
 que faltou. Não inventes o resultado nem finjas que não podias tentar.
 
+Quando te pedirem para rever ou otimizar o PC, faz primeiro a revisão e baseia
+as sugestões no que ela mediu, não em conselhos genéricos. As acções que mudam
+o computador (fechar programas, limpar temporários, mexer no arranque) não as
+fazes tu: preparas uma de cada vez, explicas o que vai acontecer, e é o
+utilizador que confirma. Nunca digas que uma acção preparada já foi feita.
+
 Depois de receberes o resultado de uma ferramenta, responde ao utilizador em
 português europeu, de forma directa e curta. Não descrevas os passos que deste
 nem menciones nomes de ferramentas.`;
+
+/**
+ * As últimas mensagens em texto, para o pré-filtro saber de que se falava.
+ * Um "sim, continua" não tem palavras, mas a conversa à volta dele tem.
+ */
+function textoRecente(historico) {
+  if (!Array.isArray(historico)) return '';
+  return historico.slice(-4).map(m => String(m?.content || '').slice(0, 4000)).join(' ');
+}
 
 /**
  * O modelo devolve os argumentos como texto JSON. Um modelo pequeno erra isto
@@ -76,7 +91,7 @@ function lerArgumentos(bruto) {
 async function correr(mensagem, contexto = {}) {
   if (!ACTIVO) return null;
 
-  const seleccionadas = tools.seleccionar(mensagem, undefined, contexto.ferramentasPreferidas);
+  const seleccionadas = tools.seleccionar(mensagem, undefined, contexto.ferramentasPreferidas, textoRecente(contexto.historico));
   if (!seleccionadas.length) return null;
 
   const esquemas = tools.paraFormatoOpenAI(seleccionadas);
@@ -176,7 +191,7 @@ async function correrComStream(mensagem, contexto = {}, saidas = {}) {
   const onToken = saidas.onToken || (() => {});
   const onProgresso = saidas.onProgresso || (() => {});
 
-  const seleccionadas = tools.seleccionar(mensagem, undefined, contexto.ferramentasPreferidas);
+  const seleccionadas = tools.seleccionar(mensagem, undefined, contexto.ferramentasPreferidas, textoRecente(contexto.historico));
   if (!seleccionadas.length) return null;
 
   const esquemas = tools.paraFormatoOpenAI(seleccionadas);

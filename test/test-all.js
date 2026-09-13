@@ -3783,6 +3783,365 @@ describe('🧰 A ferramenta escolhida vai à frente', () => {
     assertEqual(a.join(','), b.join(','));
   });
 });
+
+// ═══════════════════════════════════════════════════════════
+// DESEMPENHO DO PC: REVER A SÉRIO E SÓ MUDAR COM UM "SIM"
+// ═══════════════════════════════════════════════════════════
+
+describe('✋ Acções no PC: uma de cada vez, só com confirmação', () => {
+  const accoes = require('../orchestrator/accoesPendentes');
+
+  test('preparar não executa nada', () => {
+    accoes.limparTudo();
+    let corrida = false;
+    const r = accoes.propor('u1', { titulo: 'Teste', descricao: 'Fazer X', executar: () => { corrida = true; } });
+    assert(r.ok);
+    assert(!corrida, 'a acção correu sem confirmação');
+    assert(accoes.tem('u1'));
+    assertIncludes(r.texto, 'AINDA NÃO FEITA');
+  });
+
+  test('o texto para o modelo diz-lhe para perguntar e não dar por feito', () => {
+    accoes.limparTudo();
+    const r = accoes.propor('u1', { titulo: 'T', descricao: 'Fazer X', executar: () => ({}) });
+    assertIncludes(r.texto, 'pergunta se confirma');
+    assertIncludes(r.texto, 'Não digas que já foi feito');
+  });
+
+  test('só uma acção à espera de cada vez', () => {
+    // Foi o combinado: um "sim" nunca aprova mais do que o que se acabou de ler.
+    accoes.limparTudo();
+    accoes.propor('u1', { titulo: 'Primeira', descricao: 'A', executar: () => ({}) });
+    const segunda = accoes.propor('u1', { titulo: 'Segunda', descricao: 'B', executar: () => ({}) });
+    assert(!segunda.ok);
+    assertIncludes(segunda.texto, 'Primeira');
+    assertEqual(accoes.obter('u1').titulo, 'Primeira');
+  });
+
+  test('utilizadores diferentes não partilham acções', () => {
+    accoes.limparTudo();
+    accoes.propor('u1', { titulo: 'Do u1', descricao: 'A', executar: () => ({}) });
+    assert(!accoes.tem('u2'));
+  });
+
+  test('confirmar corre a acção uma vez e limpa-a', async () => {
+    accoes.limparTudo();
+    let vezes = 0;
+    accoes.propor('u1', { titulo: 'T', descricao: 'A', executar: async () => { vezes++; return { success: true, message: '✅ Feito o X.' }; } });
+    const texto = await accoes.confirmar('u1');
+    assertIncludes(texto, 'Feito o X');
+    assertEqual(vezes, 1);
+    assert(!accoes.tem('u1'));
+    assertEqual(await accoes.confirmar('u1'), null, 'não pode correr duas vezes');
+  });
+
+  test('cancelar não corre nada', () => {
+    accoes.limparTudo();
+    let corrida = false;
+    accoes.propor('u1', { titulo: 'Desligar Y', descricao: 'A', executar: () => { corrida = true; } });
+    assertIncludes(accoes.cancelar('u1'), 'Desligar Y');
+    assert(!corrida);
+    assert(!accoes.tem('u1'));
+  });
+
+  test('uma acção esquecida caduca e já não pode ser confirmada', () => {
+    accoes.limparTudo();
+    accoes.propor('u1', { titulo: 'T', descricao: 'A', executar: () => ({}) });
+    assertEqual(accoes.obter('u1', Date.now() + accoes.VALIDADE_MS + 1000), null);
+    assert(!accoes.tem('u1'));
+  });
+
+  test('uma acção que rebenta diz que falhou e não fica pendurada', async () => {
+    accoes.limparTudo();
+    accoes.propor('u1', { titulo: 'Rebenta', descricao: 'A', executar: async () => { throw new Error('sem acesso'); } });
+    const texto = await accoes.confirmar('u1');
+    assertIncludes(texto, 'falhou');
+    assertIncludes(texto, 'sem acesso');
+    assert(!accoes.tem('u1'));
+  });
+});
+
+
+describe('🩺 Revisão do desempenho: o que conta como sinal', () => {
+  const d = require('../agents/desempenhoAgent');
+  const GB = 1024 ** 3;
+
+  const base = () => ({
+    memoria: { percentagem: 50 },
+    processador: 10,
+    processos: { porProcessador: [], porMemoria: [] },
+    discoSistema: { letra: 'C:', total: 500 * GB, livre: 200 * GB },
+    tipoDiscoSistema: 'SSD',
+    arranque: [],
+    temporarios: { velhos: 0 },
+    ligadoHaSegundos: 3600,
+    planoEnergia: 'Equilibrado'
+  });
+
+  test('um PC saudável não inventa alarmes', () => {
+    // Um alarme por qualquer coisa ensina a ignorar os alarmes.
+    assertEqual(d.sinais(base()).length, 0);
+  });
+
+  test('memória quase cheia é sinal', () => {
+    const x = base(); x.memoria.percentagem = 92;
+    assertIncludes(d.sinais(x).join(' '), 'memória está quase cheia');
+  });
+
+  test('pouco espaço no disco do sistema é sinal', () => {
+    const x = base(); x.discoSistema.livre = 6 * GB;
+    assertIncludes(d.sinais(x).join(' '), 'pouco espaço');
+  });
+
+  test('disco mecânico é sinal, e diz que só se resolve com SSD', () => {
+    const x = base(); x.tipoDiscoSistema = 'HDD';
+    assertIncludes(d.sinais(x).join(' '), 'SSD');
+  });
+
+  test('um programa a comer processador é apontado pelo nome', () => {
+    const x = base(); x.processos.porProcessador = [{ nome: 'chrome', cpu: 40, memoria: 0 }];
+    assertIncludes(d.sinais(x).join(' '), 'chrome');
+  });
+
+  test('os processos do Windows não viram sinal', () => {
+    // O svchost são dezenas de serviços somados. Apontá-lo levaria a querer fechá-lo.
+    const x = base();
+    x.processos.porMemoria = [{ nome: 'svchost', cpu: 0, memoria: 3 * GB }];
+    x.processos.porProcessador = [{ nome: 'MsMpEng', cpu: 60, memoria: 0 }];
+    assertEqual(d.sinais(x).length, 0, d.sinais(x).join(' | '));
+  });
+
+  test('muitos programas no arranque, temporários grandes e dias sem reiniciar', () => {
+    const x = base();
+    x.arranque = Array.from({ length: 9 }, (_, i) => ({ nome: 'p' + i, ligado: true }));
+    x.temporarios.velhos = 3 * GB;
+    x.ligadoHaSegundos = 12 * 86400;
+    const tudo = d.sinais(x).join(' ');
+    assertIncludes(tudo, 'arrancar com o Windows');
+    assertIncludes(tudo, 'temporários');
+    assertIncludes(tudo, 'reiniciar');
+  });
+
+  test('o uso do processador é medido no intervalo, não acumulado desde sempre', () => {
+    // O listar-processos antigo devolvia segundos acumulados: o Explorador
+    // aparecia com 850, o que assustava sem querer dizer nada.
+    const r = d.ordenarProcessos(
+      [{ nome: 'chrome', cpuMs: 1500, memoria: 100, instancias: 5 },
+       { nome: 'Idle', cpuMs: 99999, memoria: 0, instancias: 1 }],
+      1500, 4
+    );
+    assertEqual(r.porProcessador[0].nome, 'chrome');
+    assertEqual(r.porProcessador[0].cpu, 25, 'um núcleo inteiro em quatro é 25%');
+    assert(!r.porProcessador.some(p => /idle/i.test(p.nome)), 'o Idle não é um programa');
+  });
+
+  test('lê o nome do plano de energia em qualquer língua', () => {
+    assertEqual(d.nomeDoPlanoDeEnergia('GUID do Esquema de Energia: 381b4222-f694  (Equilibrado)'), 'Equilibrado');
+    assertEqual(d.nomeDoPlanoDeEnergia('Power Scheme GUID: 8c5e7fda  (High performance) *'), 'High performance');
+  });
+});
+
+
+describe('🧯 O que nunca se propõe fechar', () => {
+  const d = require('../agents/desempenhoAgent');
+
+  test('processos do Windows, o antivírus e o próprio NEXO', async () => {
+    for (const nome of ['svchost', 'explorer', 'csrss', 'MsMpEng', 'node', 'electron', 'lsass.exe']) {
+      const r = await d.prepararFecho({ programa: nome });
+      assert(!r.success, `${nome} não devia ser proposto`);
+    }
+  });
+
+  test('curingas no nome são recusados', async () => {
+    // A regra antiga fazia "taskkill /IM chrome* /F" e apanhava tudo o que
+    // começasse por chrome.
+    const r = await d.prepararFecho({ programa: 'chrome*' });
+    assert(!r.success);
+    assertIncludes(r.error, 'nome exacto');
+  });
+});
+
+
+describe('🧹 Limpar temporários: só a pasta certa, só o que é velho', () => {
+  const d = require('../agents/desempenhoAgent');
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+
+  function comTempFalso(fn) {
+    const antes = { TEMP: process.env.TEMP, TMP: process.env.TMP, TMPDIR: process.env.TMPDIR };
+    const raiz = fs.mkdtempSync(path.join(os.tmpdir(), 'nexo-teste-'));
+    const temp = path.join(raiz, 'Temp');
+    fs.mkdirSync(temp);
+    process.env.TEMP = temp; process.env.TMP = temp; process.env.TMPDIR = temp;
+    const repor = () => {
+      for (const [k, v] of Object.entries(antes)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+      try { fs.rmSync(raiz, { recursive: true, force: true }); } catch {}
+    };
+    return Promise.resolve().then(() => fn({ raiz, temp })).finally(repor);
+  }
+
+  const envelhecer = (f) => { const t = (Date.now() - 3 * 86400000) / 1000; fs.utimesSync(f, t, t); };
+
+  test('uma pasta TEMP que não parece de temporários não é tocada', () => {
+    const antes = { TEMP: process.env.TEMP, TMP: process.env.TMP };
+    process.env.TEMP = os.homedir(); process.env.TMP = os.homedir();
+    try {
+      assertEqual(d.pastaDeTemporariosSegura(), null, 'a pasta pessoal nunca pode ser limpa');
+    } finally {
+      process.env.TEMP = antes.TEMP; process.env.TMP = antes.TMP;
+    }
+  });
+
+  test('apaga os velhos, deixa os de hoje, e não segue atalhos para fora', async () => {
+    await comTempFalso(async ({ raiz, temp }) => {
+      const velho = path.join(temp, 'velho.tmp');
+      const novo = path.join(temp, 'novo.tmp');
+      fs.writeFileSync(velho, 'x'.repeat(2048));
+      fs.writeFileSync(novo, 'y');
+      envelhecer(velho);
+
+      // Um atalho de pasta lá dentro a apontar para fora dos temporários.
+      const fora = path.join(raiz, 'fora');
+      fs.mkdirSync(fora);
+      const precioso = path.join(fora, 'precioso.txt');
+      fs.writeFileSync(precioso, 'não apagar');
+      envelhecer(precioso);
+      fs.symlinkSync(fora, path.join(temp, 'atalho'), 'junction');
+
+      const preparada = await d.prepararLimpezaTemporarios();
+      assert(preparada.success, preparada.error);
+      assert(fs.existsSync(velho), 'preparar não pode apagar nada');
+
+      const r = await preparada.executar();
+      assert(r.success, r.message);
+      assert(!fs.existsSync(velho), 'o velho devia ter ido');
+      assert(fs.existsSync(novo), 'o de hoje pode estar a ser usado e fica');
+      assert(fs.existsSync(precioso), 'o atalho foi seguido para fora dos temporários');
+    });
+  });
+
+  test('sem nada velho, não prepara nada', async () => {
+    await comTempFalso(async ({ temp }) => {
+      fs.writeFileSync(path.join(temp, 'agora.tmp'), 'z');
+      const r = await d.prepararLimpezaTemporarios();
+      assert(!r.success);
+      assertIncludes(r.error, 'Não há temporários');
+    });
+  });
+});
+
+
+describe('🧭 Pedir para otimizar o PC chega às ferramentas certas', () => {
+  const tools = require('../orchestrator/tools');
+  const intentParser = require('../orchestrator/intentParser');
+
+  test('a frase que falhou leva a revisão e as acções', () => {
+    // "pc", "lento" e "optimize" não estavam em lado nenhum, e o modelo
+    // respondeu com conselhos genéricos por não ter nada na mão.
+    const nomes = tools.seleccionar(
+      'o nosso pc esta muito lento , faz uma revisao do seu funcionamento e sugere o que temos de reconfigurar para que se optimize'
+    ).map(f => f.nome);
+    assertEqual(nomes[0], 'rever_desempenho');
+    for (const n of ['preparar_fecho_programa', 'preparar_limpeza_temporarios', 'preparar_arranque']) {
+      assert(nomes.includes(n), `faltou ${n}: ${nomes.join(',')}`);
+    }
+  });
+
+  test('"pc" dentro de outra palavra não conta', () => {
+    const nomes = tools.seleccionar('qual é a melhor opção para o jantar').map(f => f.nome);
+    assert(!nomes.includes('rever_desempenho'), nomes.join(','));
+  });
+
+  test('um "sim, continua" a meio da revisão mantém as ferramentas', () => {
+    const recente = 'Revisão do desempenho. Programas que mais usam o processador (19 processos). Arrancam com o Windows.';
+    const nomes = tools.seleccionar('sim, continua', undefined, [], recente).map(f => f.nome);
+    assert(nomes.includes('rever_desempenho'), nomes.join(','));
+    assert(nomes.includes('preparar_arranque'), nomes.join(','));
+  });
+
+  test('"fecha o chrome" já não fecha à força sem perguntar', () => {
+    // A regra fazia "taskkill /IM chrome* /F": curinga, força e sem pergunta.
+    const i = intentParser.parseIntent('fecha o chrome').intent;
+    assert(tools.melhorComFerramentas(i), `${i} ainda vai pela regra antiga`);
+    assert(tools.seleccionar('fecha o chrome').some(f => f.nome === 'preparar_fecho_programa'));
+  });
+
+  test('as ferramentas de acção não fazem nada ao serem chamadas sem utilizador', async () => {
+    const r = await tools.executar('preparar_limpeza_temporarios', {}, {});
+    assertIncludes(r, 'NÃO FOI PREPARADA');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// UM "SIM" SÓ APROVA O QUE SE ACABOU DE LER
+// ═══════════════════════════════════════════════════════════
+
+describe('🔒 Um "sim" nunca apanha uma proposta antiga', () => {
+  const orchestrator = require('../orchestrator/orchestrator');
+
+  test('um plano acabado de propor está à espera', () => {
+    const conversa = { _pendingPlan: { nome: 'x' }, _pendingPlanEm: Date.now() };
+    assert(orchestrator.planoPendente(conversa));
+  });
+
+  test('um plano esquecido caduca e é deitado fora', () => {
+    // Medido: um "sim" dado a outra coisa, horas depois e com o NEXO
+    // reiniciado, construiu um projecto "todo-list" que ninguém tinha pedido.
+    const conversa = { _pendingPlan: { nome: 'todo-list' }, _pendingPlanEm: Date.now() - orchestrator.VALIDADE_PLANO_MS - 1000 };
+    assertEqual(orchestrator.planoPendente(conversa), null);
+    assert(!conversa._pendingPlan, 'o plano caducado devia ter sido apagado');
+  });
+
+  test('um plano gravado antes de existir hora conta como caducado', () => {
+    // Os planos antigos no disco não tinham hora. Não se sabe há quanto tempo
+    // estão lá, por isso não podem ser construídos por um "sim" de agora.
+    const conversa = { _pendingPlan: { nome: 'antigo' } };
+    assertEqual(orchestrator.planoPendente(conversa), null);
+  });
+});
+
+
+describe('🧭 A regra que já reconheceu o pedido passa-o à ferramenta certa', () => {
+  const tools = require('../orchestrator/tools');
+  const intentParser = require('../orchestrator/intentParser');
+
+  test('"força o fecho do programa X" chega à ferramenta de fechar', () => {
+    // A regra reconhecia o pedido, mas "fecho" não estava nas palavras da
+    // ferramenta, e o modelo respondeu que não conseguia fechar programas.
+    const i = intentParser.parseIntent('força o fecho do programa nexoteste').intent;
+    assertEqual(i, 'system_kill_process');
+    assertEqual(tools.ferramentasDaIntencao(i)[0], 'preparar_fecho_programa');
+  });
+
+  test('cada intenção cedida ao modelo aponta para uma ferramenta que existe', () => {
+    for (const [intencao, nome] of Object.entries(tools.FERRAMENTA_DA_INTENCAO)) {
+      assert(tools.porNome(nome), `${intencao} aponta para ${nome}, que não existe`);
+    }
+  });
+
+  test('uma intenção sem ferramenta própria não impõe nada', () => {
+    assertEqual(tools.ferramentasDaIntencao('chat').length, 0);
+    assertEqual(tools.ferramentasDaIntencao(undefined).length, 0);
+  });
+});
+
+
+describe('💀 A regra antiga de fechar processos já não fecha à força', () => {
+  const fs = require('fs');
+  const path = require('path');
+
+  test('o orchestrator prepara e pergunta, em vez de chamar o killProcess', () => {
+    // Pelo caminho HTTP, Telegram ou linha de comandos, "fecha o chrome" ainda
+    // fazia "taskkill /IM chrome* /F" sem perguntar.
+    const codigo = fs.readFileSync(path.join(__dirname, '..', 'orchestrator', 'orchestrator.js'), 'utf8');
+    const caso = codigo.slice(codigo.indexOf("case 'system_kill_process'"), codigo.indexOf("case 'system_list_windows'"));
+    assert(caso.length > 0, 'não encontrei o caso');
+    assert(!caso.includes('killProcess('), 'ainda chama o killProcess');
+    assertIncludes(caso, 'prepararFecho');
+    assertIncludes(caso, 'accoesPendentes.propor');
+  });
+});
 // ═══════════════════════════════════════════════════════════
 // RESULTADO FINAL
 // ═══════════════════════════════════════════════════════════
