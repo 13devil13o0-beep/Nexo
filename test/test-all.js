@@ -4142,6 +4142,89 @@ describe('💀 A regra antiga de fechar processos já não fecha à força', () 
     assertIncludes(caso, 'accoesPendentes.propor');
   });
 });
+
+// ═══════════════════════════════════════════════════════════
+// UMA LIGAÇÃO QUE CAI NÃO TIRA O GROQ DE SERVIÇO
+// ═══════════════════════════════════════════════════════════
+
+describe('🔁 Falha de ligação: tenta outra vez antes de pôr o fornecedor de lado', () => {
+  const llmRouter = require('../orchestrator/llmRouter');
+
+  const ligacaoCaiu = (codigo = 'UND_ERR_SOCKET') => {
+    const e = new TypeError('fetch failed');
+    e.cause = Object.assign(new Error('other side closed'), { code: codigo });
+    return e;
+  };
+
+  test('reconhece uma ligação que caiu', () => {
+    assert(llmRouter.ehFalhaDeLigacao(ligacaoCaiu()));
+    assert(llmRouter.ehFalhaDeLigacao(ligacaoCaiu('ECONNRESET')));
+    assert(llmRouter.ehFalhaDeLigacao(new TypeError('fetch failed')));
+  });
+
+  test('não repete o que não se resolve a repetir', () => {
+    // Um prazo esgotado dobrava a espera. Um erro do serviço tem tratamento
+    // próprio. E uma ligação recusada é o Ollama que não está a correr.
+    assert(!llmRouter.ehFalhaDeLigacao(new Error('Groq não respondeu em 45s')));
+    assert(!llmRouter.ehFalhaDeLigacao(new Error('Groq 401: invalid api key')));
+    assert(!llmRouter.ehFalhaDeLigacao(new Error('Gemini stream 503: network overloaded')));
+    assert(!llmRouter.ehFalhaDeLigacao(ligacaoCaiu('ECONNREFUSED')));
+    assert(!llmRouter.ehFalhaDeLigacao(null));
+  });
+
+  /** Corre o streaming com um fetch falso só para o Groq. */
+  async function comFetchFalso(respostas, tarefa) {
+    const antes = { fetch: global.fetch, ordem: process.env.LLM_PROVIDER_ORDER, chave: process.env.GROQ_API_KEY };
+    let chamadas = 0;
+    global.fetch = async (url) => {
+      if (!String(url).includes('api.groq.com')) throw new Error('fora do teste: ' + url);
+      const r = respostas[Math.min(chamadas, respostas.length - 1)];
+      chamadas++;
+      if (r instanceof Error) throw r;
+      return typeof r === 'function' ? r() : r;
+    };
+    process.env.LLM_PROVIDER_ORDER = 'groq';
+    process.env.GROQ_API_KEY = process.env.GROQ_API_KEY || 'gsk_teste_chave_falsa_longa';
+    try {
+      return await tarefa(() => chamadas);
+    } finally {
+      global.fetch = antes.fetch;
+      if (antes.ordem === undefined) delete process.env.LLM_PROVIDER_ORDER; else process.env.LLM_PROVIDER_ORDER = antes.ordem;
+      if (antes.chave === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = antes.chave;
+    }
+  }
+
+  const linhaSSE = (t) => `data: ${JSON.stringify({ choices: [{ delta: { content: t } }] })}\n\n`;
+  const respostaSSE = (...partes) => new Response(partes.map(linhaSSE).join('') + 'data: [DONE]\n\n', { status: 200 });
+
+  test('a ligação cai uma vez: a resposta chega na mesma, sem ir para outro fornecedor', async () => {
+    await comFetchFalso([ligacaoCaiu(), () => respostaSSE('Olá ', 'de novo')], async (chamadas) => {
+      let escrito = '';
+      await llmRouter.chatStream([{ role: 'user', content: 'olá' }], (t) => { escrito += t; }, () => {}, { maxTokens: 16 });
+      assertEqual(escrito, 'Olá de novo');
+      assertEqual(chamadas(), 2, 'devia ter tentado exactamente duas vezes');
+    });
+  });
+
+  test('depois de escrever no ecrã, não repete: diz que ficou a meio', async () => {
+    // Repetir aqui escreveria a resposta outra vez por cima da que já se via.
+    const aMeio = () => new Response(new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(linhaSSE('Meia resposta')));
+        setTimeout(() => c.error(Object.assign(new TypeError('terminated'), { cause: { code: 'ECONNRESET' } })), 20);
+      }
+    }), { status: 200 });
+
+    await comFetchFalso([aMeio, () => respostaSSE('não devia aparecer')], async (chamadas) => {
+      let escrito = '';
+      await llmRouter.chatStream([{ role: 'user', content: 'olá' }], (t) => { escrito += t; }, () => {}, { maxTokens: 16 });
+      assertIncludes(escrito, 'Meia resposta');
+      assertIncludes(escrito, 'ficou a meio');
+      assert(!escrito.includes('não devia aparecer'), 'repetiu depois de já ter escrito');
+      assertEqual(chamadas(), 1);
+    });
+  });
+});
 // ═══════════════════════════════════════════════════════════
 // RESULTADO FINAL
 // ═══════════════════════════════════════════════════════════

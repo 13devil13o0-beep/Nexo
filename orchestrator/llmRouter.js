@@ -190,6 +190,70 @@ function setCooldown(providerId) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// UMA FALHA DE LIGAÇÃO NÃO É UM FORNECEDOR EM BAIXO
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Códigos de uma ligação que caiu a meio, e não de um serviço que recusou.
+ *
+ * Medido numa verificação: um único "fetch failed" pôs o Groq de castigo
+ * durante um minuto. A Gemini estava sobrecarregada nesse momento, e as quatro
+ * mensagens seguintes responderam "todos os providers falharam", com o Groq
+ * perfeitamente bem. Uma quebra de rede de meio segundo não pode tirar o motor
+ * principal de serviço durante um minuto inteiro.
+ */
+const CODIGOS_DE_LIGACAO = new Set([
+  'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'ENETUNREACH', 'EHOSTUNREACH',
+  'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_CLOSED'
+]);
+
+/** Pausa antes da nova tentativa: o suficiente para uma ligação nova, sem se notar. */
+const PAUSA_NOVA_TENTATIVA_MS = parseInt(process.env.PAUSA_NOVA_TENTATIVA_MS) || 400;
+
+/**
+ * Isto foi a ligação a cair, e vale a pena tentar outra vez já?
+ *
+ * Fica de fora o que não se resolve a repetir: um prazo esgotado (repetir
+ * dobrava a espera), uma resposta de erro do serviço (4xx, 5xx, que já têm
+ * tratamento próprio) e uma ligação recusada, que é o Ollama que não está a
+ * correr, e que não vai começar a correr daqui a meio segundo.
+ */
+function ehFalhaDeLigacao(erro) {
+  if (!erro) return false;
+  const causa = erro.cause || {};
+  const codigo = causa.code || erro.code;
+
+  if (codigo === 'ECONNREFUSED') return false;
+  if (codigo && CODIGOS_DE_LIGACAO.has(codigo)) return true;
+
+  const texto = `${erro.message || ''} ${causa.message || ''}`;
+  if (/não respondeu em|foi interrompido/i.test(texto)) return false;
+  // "Groq 503: ..." ou "Gemini stream 429: ...": o serviço respondeu, com erro.
+  if (/^\S+(?: \(streaming\))?(?: stream)? [45]\d\d:/.test(erro.message || '')) return false;
+  return /fetch failed|other side closed|socket hang up|terminated|network/i.test(texto);
+}
+
+/**
+ * Corre o pedido, e se a ligação cair antes de haver resposta tenta uma vez
+ * mais, numa ligação nova. Só se falhar outra vez é que o fornecedor fica de
+ * lado, como antes.
+ *
+ * @param {Function} ainda  diz se ainda é seguro repetir (no streaming, só
+ *   enquanto nada foi escrito no ecrã)
+ */
+async function comNovaTentativa(provider, pedido, ainda = () => true) {
+  try {
+    return await pedido();
+  } catch (erro) {
+    if (!ehFalhaDeLigacao(erro) || !ainda()) throw erro;
+    const codigo = erro.cause?.code || erro.code || erro.message;
+    console.warn(`  🔁 ${provider.name}: a ligação caiu (${codigo}), a tentar outra vez...`);
+    await new Promise(r => setTimeout(r, PAUSA_NOVA_TENTATIVA_MS));
+    return await pedido();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
 // CHAMADA PRINCIPAL (SEM STREAMING)
 // ═══════════════════════════════════════════════════════════
 
@@ -431,7 +495,7 @@ async function chatInternal(messages, options = {}) {
     }
 
     try {
-      const result = await callProvider(provider.id, messages, options);
+      const result = await comNovaTentativa(provider, () => callProvider(provider.id, messages, options));
       if (result.success) return result;
     } catch (error) {
       console.error(`  ❌ ${provider.name} falhou: ${error.message}`);
@@ -593,7 +657,13 @@ async function chatStreamInternal(messages, onToken, onDone, options = {}) {
     if (isInCooldown(provider.id)) continue;
 
     try {
-      return await streamFromProvider(provider.id, messages, vigiado, onDone, options);
+      // A nova tentativa só vale enquanto nada foi escrito. Depois do primeiro
+      // pedaço no ecrã, repetir escreveria a resposta outra vez por cima.
+      return await comNovaTentativa(
+        provider,
+        () => streamFromProvider(provider.id, messages, vigiado, onDone, options),
+        () => !escrito
+      );
     } catch (error) {
       console.error(`  ❌ Stream ${provider.name} falhou: ${error.message}`);
       setCooldown(provider.id);
@@ -1324,6 +1394,7 @@ module.exports = {
   customProviderMode,
   hasCustomTier,
   querLocal,
+  ehFalhaDeLigacao,
   escolherCadeia,
   PROVIDERS
 };
