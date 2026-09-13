@@ -29,6 +29,8 @@ const fileAgent = require('../agents/fileAgent');
 const codeRunner = require('../agents/codeRunner');
 const systemAgent = require('../agents/systemAgent');
 const desempenhoAgent = require('../agents/desempenhoAgent');
+const comandosAgent = require('../agents/comandosAgent');
+const perfilPC = require('../agents/perfilPC');
 const accoesPendentes = require('./accoesPendentes');
 const clipboardAgent = require('../agents/clipboardAgent');
 const visionAgent = require('../agents/visionAgent');
@@ -291,6 +293,66 @@ const FERRAMENTAS = [
     executar: async (args, ctx) => semUtilizador(ctx) || proporAccao(ctx, await desempenhoAgent.prepararArranque(args))
   },
 
+  // ═══ Conhecer o PC e perguntar-lhe coisas ═══════════════
+  //
+  // Nenhuma lista escrita à mão cobre tudo o que se pode perguntar sobre um
+  // PC. Em vez de uma ferramenta por pergunta, o modelo escreve o comando de
+  // leitura de que precisa, e o código decide se corre. Ver
+  // agents/comandosAgent.js e agents/regrasComandos.js.
+  //
+  // As palavras vão em raízes ("atualiz", "servic") porque o pré-filtro
+  // procura texto dentro da frase: apanham "atualizou" e "atualizações".
+
+  {
+    nome: 'perfil_do_pc',
+    risco: 'ler',
+    palavras: ['programas instalados', 'que programas', 'instalad', 'especificac', 'caracteristicas do',
+               'hardware', 'placa grafica', 'gpu', 'versao do windows', 'que windows', 'modelo do pc',
+               'modelo do computador', 'portatil', 'resolucao', 'brilho', 'navegador predefinido',
+               'meu pc', 'o pc', 'nosso pc', 'do pc', 'computador'],
+    descricao: 'Mostra o que se sabe deste PC: versão e língua do Windows, modelo, processador, memória, placa gráfica, discos, se o brilho se controla, onde ficam as pastas do utilizador e os programas instalados. Usa-a para perguntas sobre o equipamento ou sobre se um programa está instalado.',
+    parametros: {
+      type: 'object',
+      properties: {
+        procurarPrograma: { type: 'string', description: 'Parte do nome de um programa, para saber se está instalado e em que versão. Vazio para ver tudo.' },
+        refrescar: { type: 'boolean', description: 'Voltar a recolher agora. Só se o utilizador disser que mudou alguma coisa no PC.' }
+      },
+      required: [],
+      additionalProperties: false
+    },
+    notas: () => { comandosAgent.prepararPerfil(); return null; },
+    executar: async ({ procurarPrograma, refrescar }) =>
+      perfilPC.textoDoPerfil(await perfilPC.obter({ refrescar: refrescar === true }), { procurarPrograma })
+  },
+
+  {
+    nome: 'consultar_pc',
+    risco: 'ler',
+    // "ocupa" e "som" sozinhos apanhavam "preocupa" e "somar".
+    palavras: ['quanto ocupa', 'ocupam', 'tamanho da pasta', 'maiores ficheiros', 'ficheiros grandes', 'quantos',
+               'quantas', 'servic', 'rede', 'wifi', 'wi-fi', 'adaptador', 'driver', 'impressor', 'bluetooth',
+               'usb', 'atualiz', 'actualiz', 'windows update', 'eventos', 'erros do windows', 'ligado desde',
+               'ultimo arranque', 'tarefas agendadas', 'firewall', 'antivirus', 'defender', 'portas', 'ligacoes',
+               'contas de utilizador', 'transferencias', 'downloads', 'ambiente de trabalho', 'bateri', 'monitor',
+               'audio', 'o som', 'meu pc', 'o pc', 'nosso pc', 'do pc', 'computador', 'instalad'],
+    descricao: 'Corre um comando PowerShell 5.1 escrito por ti, para responder a perguntas sobre este PC que as outras ferramentas não cobrem: tamanho de pastas, maiores ficheiros, serviços, rede, drivers, actualizações, eventos do Windows, bateria, etc. SÓ CORRE LEITURAS: as regras de segurança recusam comandos que mudem o PC, programas externos (.exe), métodos que alterem objectos, Get-Content e caminhos de rede. Usa comandos Get-* com Select-Object, Where-Object, Sort-Object e Measure-Object. Devolve o resultado do comando.',
+    parametros: {
+      type: 'object',
+      properties: {
+        tarefa: { type: 'string', description: 'O que o utilizador quer saber, em poucas palavras e em português. Serve para reconhecer o comando da próxima vez.' },
+        comando: { type: 'string', description: 'O comando PowerShell, só de leitura.' }
+      },
+      required: ['tarefa', 'comando'],
+      additionalProperties: false
+    },
+    notas: (mensagem) => { comandosAgent.prepararPerfil(); return comandosAgent.notasPara(mensagem); },
+    executar: async ({ tarefa, comando }, ctx) => {
+      const r = await comandosAgent.consultar({ tarefa, script: comando });
+      security.logAction(ctx.userId, 'comando-pc', { tarefa, classe: r.classe, corrido: r.corrido, comando: String(comando || '').slice(0, 300) });
+      return r.texto;
+    }
+  },
+
   {
     nome: 'ver_area_transferencia',
     risco: 'ler',
@@ -414,8 +476,11 @@ const PADRAO = [
   'listar_ficheiros',
   'ler_ficheiro',
   'procurar_em_ficheiros',
-  'executar_codigo',
-  'data_e_hora'
+  // Um pedido sobre o PC escrito à maneira de cada um nem sempre tem uma
+  // palavra do pré-filtro. As horas saíram para lhe dar lugar: "que horas são"
+  // e "que dia é hoje" apontam para lá pelas palavras.
+  'consultar_pc',
+  'executar_codigo'
 ];
 
 /**
@@ -437,6 +502,8 @@ const EM_CURSO = {
   preparar_fecho_programa: '✋ a preparar o fecho (vou pedir confirmação)',
   preparar_limpeza_temporarios: '✋ a preparar a limpeza (vou pedir confirmação)',
   preparar_arranque: '✋ a preparar a mudança no arranque (vou pedir confirmação)',
+  perfil_do_pc: '🖥️ a ver o que sei deste PC',
+  consultar_pc: '🔎 a consultar o PC (só leitura)',
   info_sistema: '🖥️ a ver o estado da máquina',
   ver_area_transferencia: '📋 a ver a área de transferência',
   analisar_ecra: '👁️ a olhar para o ecrã',
@@ -635,6 +702,27 @@ function porNome(nome) {
 }
 
 /**
+ * O que as ferramentas escolhidas querem que o modelo saiba antes de começar.
+ *
+ * Só a de comandos tem, por agora: o que se sabe deste PC e os comandos que
+ * resultaram antes. Vai só quando ela vai no menu, para não engordar os
+ * pedidos que não têm nada a ver com o PC.
+ */
+function notasDasFerramentas(seleccionadas, mensagem) {
+  const notas = [];
+  for (const f of seleccionadas || []) {
+    if (typeof f.notas !== 'function') continue;
+    try {
+      const nota = f.notas(mensagem);
+      if (nota) notas.push(nota);
+    } catch (e) {
+      console.warn(`  ⚠️ Notas de ${f.nome} falharam: ${e.message}`);
+    }
+  }
+  return notas.length ? notas.join('\n\n') : null;
+}
+
+/**
  * Executa uma ferramenta pedida pelo modelo.
  *
  * Passa primeiro pela barreira de permissões: uma ferramenta da classe
@@ -668,6 +756,7 @@ module.exports = {
   paraFormatoOpenAI,
   executar,
   porNome,
+  notasDasFerramentas,
   normalizar,
   emCurso,
   EM_CURSO,

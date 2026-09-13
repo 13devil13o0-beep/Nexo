@@ -11,6 +11,11 @@
 
 const path = require('path');
 
+// O ciclo de ferramentas pede o perfil do PC em fundo quando a ferramenta de
+// comandos vai no menu. Nos testes isso poria o PowerShell a recolher o PC
+// real, e a gravar o perfil na pasta do projecto.
+process.env.NEXO_PERFIL_EM_FUNDO = '0';
+
 // ═══════════════════════════════════════════════════════════
 // MINI TEST FRAMEWORK
 // ═══════════════════════════════════════════════════════════
@@ -4231,6 +4236,337 @@ describe('🔁 Falha de ligação: tenta outra vez antes de pôr o fornecedor de
 
 // O resultado só se conta depois de os testes assíncronos acabarem. Contá-lo
 // antes era o mesmo que não os ter.
+// ═══════════════════════════════════════════════════════════
+// FASE 1: O NEXO ESCREVE OS SEUS COMANDOS, E O CÓDIGO DECIDE SE CORREM
+// ═══════════════════════════════════════════════════════════
+
+/** Uma pasta de dados só para o teste, para não mexer na memória real. */
+function comPastaDeDados(fn) {
+  const fs = require('fs');
+  const os = require('os');
+  const pasta = fs.mkdtempSync(path.join(os.tmpdir(), 'nexo-comandos-'));
+  const antes = process.env.USER_DATA_PATH;
+  process.env.USER_DATA_PATH = pasta;
+  const repor = () => {
+    if (antes === undefined) delete process.env.USER_DATA_PATH; else process.env.USER_DATA_PATH = antes;
+    fs.rmSync(pasta, { recursive: true, force: true });
+  };
+  let resultado;
+  try {
+    resultado = fn(pasta);
+  } catch (e) {
+    repor();
+    throw e;
+  }
+  if (resultado && typeof resultado.then === 'function') return resultado.finally(repor);
+  repor();
+  return resultado;
+}
+
+describe('🛡️ Comandos gerados: quem decide se correm são as regras', () => {
+  const regras = require('../agents/regrasComandos');
+
+  const comando = (resolvido, extra = {}) => ({ nome: resolvido, resolvido, tipo: 'Cmdlet', doSistema: true, invocacao: 'Unknown', elementos: [], ...extra });
+  const arvore = (extra = {}) => ({ errosSintaxe: [], comandos: [], metodos: [], atribuicoesPerigosas: [], unidades: [], redireccoes: [], textos: [], conversoes: [], estruturas: [], funcoes: [], ...extra });
+
+  test('uma leitura com arrumação corre', () => {
+    const r = regras.classificar(arvore({
+      comandos: [comando('Get-ChildItem'), comando('Measure-Object')],
+      metodos: [{ nome: 'Round', estatico: true, tipo: 'System.Math', argumentos: [] }]
+    }));
+    assertEqual(r.classe, 'ler', r.motivos.join('; '));
+  });
+
+  test('um comando que muda o PC não corre, e diz porquê', () => {
+    const r = regras.classificar(arvore({ comandos: [comando('Get-ChildItem'), comando('Remove-Item')] }));
+    assertEqual(r.classe, 'muda');
+    assertIncludes(r.motivos.join(' '), 'Remove-Item');
+  });
+
+  test('o que não está na lista não corre, mesmo parecendo inofensivo', () => {
+    assertEqual(regras.classificar(arvore({ comandos: [comando('ping', { tipo: 'Application' })] })).classe, 'recusado');
+    assertEqual(regras.classificar(arvore({ comandos: [{ ...comando(null), nome: 'xyz' }] })).classe, 'recusado');
+    assertEqual(regras.classificar(arvore({ metodos: [{ nome: 'Kill', estatico: false }] })).classe, 'recusado');
+    assertEqual(regras.classificar(arvore({ metodos: [{ nome: 'WriteAllText', estatico: true, tipo: 'IO.File' }] })).classe, 'recusado');
+  });
+
+  test('ler ficheiros e segredos tem outro caminho', () => {
+    assertEqual(regras.classificar(arvore({ comandos: [comando('Get-Content')] })).classe, 'recusado');
+    assertEqual(regras.classificar(arvore({ comandos: [comando('Get-BitLockerVolume')] })).classe, 'recusado');
+    assertEqual(regras.classificar(arvore({ comandos: [comando('Get-StoredCredential')] })).classe, 'recusado');
+  });
+
+  test('mudar uma propriedade de um objecto vivo conta como mudar o PC', () => {
+    // (Get-Process x).PriorityClass = 'Idle' não chama comando nenhum.
+    const r = regras.classificar(arvore({ comandos: [comando('Get-Process')], atribuicoesPerigosas: ['(Get-Process x).PriorityClass'] }));
+    assertEqual(r.classe, 'muda');
+  });
+
+  test('nada de sair do PC: caminhos de rede, outro computador, parâmetros escondidos', () => {
+    assertEqual(regras.classificar(arvore({ comandos: [comando('Get-ChildItem')], textos: ['\\\\servidor\\partilha'] })).classe, 'recusado');
+    assertEqual(regras.classificar(arvore({ comandos: [comando('Get-ChildItem')], textos: ['\\'] })).classe, 'recusado');
+    assertEqual(regras.classificar(arvore({ comandos: [comando('Get-ChildItem')], textos: ['file://servidor/x'] })).classe, 'recusado');
+    assertEqual(regras.classificar(arvore({ comandos: [comando('Get-Process', { elementos: [{ tipo: 'CommandParameterAst', parametro: 'ComputerName' }] })] })).classe, 'recusado');
+    assertEqual(regras.classificar(arvore({ comandos: [comando('Get-Process', { elementos: [{ tipo: 'VariableExpressionAst', espalhado: true }] })] })).classe, 'recusado');
+  });
+
+  test('um Get- de um módulo instalado à parte não corre', () => {
+    const r = regras.classificar(arvore({ comandos: [comando('Get-MgUser', { doSistema: false })] }));
+    assertEqual(r.classe, 'recusado');
+  });
+
+  test('ForEach-Object com o nome de um método não corre', () => {
+    const r = regras.classificar(arvore({ comandos: [comando('ForEach-Object', { elementos: [{ tipo: 'StringConstantExpressionAst' }] })] }));
+    assertEqual(r.classe, 'recusado');
+  });
+
+  test('com erros de escrita não se adivinha', () => {
+    assertEqual(regras.classificar(arvore({ errosSintaxe: ["Missing closing ')'"] })).classe, 'recusado');
+  });
+
+  test('o PowerShell a sério: leituras passam', async () => {
+    for (const c of [
+      'Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version',
+      'gci $env:TEMP -File | sort Length -Descending | select -First 3 Name',
+      "[math]::Round((Get-ChildItem \"$env:USERPROFILE\" -File | Measure-Object Length -Sum).Sum / 1MB, 1)",
+      'function Tamanho($p) { (Get-ChildItem $p -Recurse -File | Measure-Object Length -Sum).Sum }\nTamanho $env:TEMP'
+    ]) {
+      const r = await regras.verificar(c);
+      assertEqual(r.classe, 'ler', `${c} → ${r.motivos.join('; ')}`);
+    }
+  });
+
+  test('o PowerShell a sério: os truques são apanhados', async () => {
+    for (const c of [
+      'gc .env',
+      'iex "Remove-Item x"',
+      "& ('Remove' + '-Item') x",
+      'Get-ChildItem x | ForEach-Object Delete',
+      '"$(Stop-Process -Name x)"',
+      '(Get-Process -Id $PID).PriorityClass = "Idle"',
+      "$p = @{ ComputerName = 'outro' }; Get-Process @p",
+      "Get-ChildItem ('\\' + '\\servidor\\x')",
+      'Get-Process > p.txt',
+      'cmd /c del x'
+    ]) {
+      const r = await regras.verificar(c);
+      assert(r.classe !== 'ler', `deixou passar: ${c}`);
+    }
+  });
+
+  test('verificar não corre o comando', async () => {
+    const fs = require('fs');
+    const os = require('os');
+    const alvo = path.join(os.tmpdir(), `nexo-nao-apagar-${process.pid}.txt`);
+    fs.writeFileSync(alvo, 'x');
+    try {
+      const r = await regras.verificar(`Remove-Item '${alvo}'`);
+      assertEqual(r.classe, 'muda');
+      assert(fs.existsSync(alvo), 'a verificação apagou o ficheiro');
+    } finally {
+      fs.rmSync(alvo, { force: true });
+    }
+  });
+});
+
+describe('🔑 Os comandos gerados não veem as chaves do NEXO', () => {
+  const comandosAgent = require('../agents/comandosAgent');
+
+  test('só passam as variáveis do Windows', () => {
+    const limpo = comandosAgent.ambienteLimpo({
+      Path: 'C:\\Windows', USERPROFILE: 'C:\\Users\\x', SystemRoot: 'C:\\Windows',
+      GROQ_API_KEY: 'gsk_x', GITHUB_TOKEN: 'ghp_x', TELEGRAM_BOT: '123:abc', MINHA_COISA: 'segredo'
+    });
+    assertEqual(Object.keys(limpo).sort().join(','), 'Path,SystemRoot,USERPROFILE');
+  });
+
+  test('um comando que pede a chave recebe nada', async () => {
+    const antes = process.env.GROQ_API_KEY;
+    process.env.GROQ_API_KEY = 'gsk_isto_nao_pode_aparecer';
+    try {
+      await comPastaDeDados(async () => {
+        const directo = await comandosAgent.consultar({ tarefa: 'chave', script: '$env:GROQ_API_KEY' });
+        assert(!directo.texto.includes('gsk_isto_nao_pode_aparecer'), 'a chave apareceu');
+        const lista = await comandosAgent.consultar({ tarefa: 'ambiente', script: 'Get-ChildItem env: | Select-Object -ExpandProperty Name' });
+        assert(lista.corrido, lista.texto);
+        assert(!/GROQ_API_KEY/.test(lista.texto), 'a variável aparece na lista');
+      });
+    } finally {
+      if (antes === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = antes;
+    }
+  });
+});
+
+describe('🧠 A memória dos comandos: o que resultou volta a ser sugerido', () => {
+  const comandosAgent = require('../agents/comandosAgent');
+
+  test('o mesmo comando com espaços diferentes conta como o mesmo', () => {
+    comPastaDeDados(() => {
+      comandosAgent.registarSucesso('quanto ocupa a pasta transferências', 'Get-ChildItem  x |  Measure-Object');
+      const e = comandosAgent.registarSucesso('tamanho das transferências', 'Get-ChildItem x | Measure-Object');
+      assertEqual(e.vezes, 2);
+      assertEqual(comandosAgent.lerMemoria().resultaram.length, 1);
+    });
+  });
+
+  test('um comando que falhou e depois resultou deixa de ser aviso', () => {
+    comPastaDeDados(() => {
+      comandosAgent.registarFalha('serviços parados', 'Get-Service | ?', 'erro');
+      comandosAgent.registarSucesso('serviços parados', 'Get-Service | ?');
+      assertEqual(comandosAgent.lerMemoria().falharam.length, 0);
+    });
+  });
+
+  test('pedidos parecidos encontram-se, mesmo com acentos e palavras diferentes à volta', () => {
+    comPastaDeDados(() => {
+      comandosAgent.registarSucesso('quanto ocupa a pasta transferências', 'SCRIPT-TRANSFERENCIAS');
+      comandosAgent.registarSucesso('que impressoras tenho', 'SCRIPT-IMPRESSORAS');
+      const achados = comandosAgent.semelhantes('diz-me quanto espaço ocupa a minha pasta de transferencias');
+      assertEqual(achados.resultaram.length, 1);
+      assertEqual(achados.resultaram[0].script, 'SCRIPT-TRANSFERENCIAS');
+      assertEqual(comandosAgent.semelhantes('qual é a capital de França').resultaram.length, 0);
+    });
+  });
+
+  test('o modelo recebe o que resultou e o que falhou antes', () => {
+    comPastaDeDados(() => {
+      comandosAgent.registarSucesso('maiores ficheiros nas transferências', 'SCRIPT-BOM');
+      comandosAgent.registarFalha('maiores ficheiros nas transferências', 'SCRIPT-MAU', 'recusado: Get-Content');
+      const notas = comandosAgent.notasPara('quais são os maiores ficheiros nas transferências?');
+      assertIncludes(notas, 'SCRIPT-BOM');
+      assertIncludes(notas, 'SCRIPT-MAU');
+      assertIncludes(notas, 'não as repitas');
+    });
+  });
+
+  test('um comando recusado fica como aviso, e não corre', async () => {
+    await comPastaDeDados(async () => {
+      const r = await comandosAgent.consultar({ tarefa: 'apagar temporários', script: 'Remove-Item $env:TEMP\\nexo-inexistente-*' });
+      assertEqual(r.corrido, false);
+      assertEqual(r.classe, 'muda');
+      assertIncludes(r.texto, 'NÃO CORREU');
+      assertEqual(comandosAgent.lerMemoria().falharam.length, 1);
+    });
+  });
+
+  test('uma leitura que resultou fica aprendida', async () => {
+    await comPastaDeDados(async () => {
+      const r = await comandosAgent.consultar({ tarefa: 'versão do windows', script: '(Get-CimInstance Win32_OperatingSystem).BuildNumber' });
+      assert(r.corrido, r.texto);
+      assertMatch(r.texto, /\d{4,}/);
+      assertEqual(comandosAgent.lerMemoria().resultaram.length, 1);
+    });
+  });
+});
+
+describe('🖥️ Perfil do PC: o que o NEXO sabe da máquina', () => {
+  const perfilPC = require('../agents/perfilPC');
+  const fs = require('fs');
+
+  const falso = {
+    recolhidoEm: new Date().toISOString(),
+    dados: {
+      windows: { nome: 'Microsoft Windows 11 Home', versao: '25H2', build: '26200', idioma: 'pt-PT' },
+      powershell: '5.1', administrador: false,
+      equipamento: { fabricante: 'LENOVO', modelo: '82R4', processador: 'Ryzen', nucleos: 8, ramGb: 16, portatil: true, brilhoControlavel: true, discos: { nome: 'SSD X', tipo: 'SSD', gb: 954 } },
+      pastas: { transferencias: 'D:\\Transferências' },
+      programas: [{ nome: 'VLC media player', versao: '3.0' }, { nome: 'Git', versao: '2.5' }]
+    }
+  };
+
+  test('o resumo diz a língua do Windows e onde ficam as pastas', () => {
+    const r = perfilPC.resumoCurto(falso);
+    assertIncludes(r, 'pt-PT');
+    assertIncludes(r, 'D:\\Transferências');
+    assertIncludes(r, 'sem administrador');
+  });
+
+  test('responde se um programa está instalado', () => {
+    assertIncludes(perfilPC.textoDoPerfil(falso, { procurarPrograma: 'vlc' }), 'VLC media player 3.0');
+    assertIncludes(perfilPC.textoDoPerfil(falso, { procurarPrograma: 'photoshop' }), 'Não há nenhum programa');
+  });
+
+  test('um disco sozinho não parte o texto', () => {
+    // O ConvertTo-Json do PowerShell 5.1 devolve um objecto em vez de uma lista quando só há um.
+    assertIncludes(perfilPC.textoDoPerfil(falso), 'SSD X');
+  });
+
+  test('um perfil com mais de uma semana volta a ser recolhido', () => {
+    assert(!perfilPC.caducado(falso));
+    assert(perfilPC.caducado({ recolhidoEm: new Date(Date.now() - perfilPC.VALIDADE_MS - 1000).toISOString() }));
+    assert(perfilPC.caducado({}));
+  });
+
+  test('não recolhe números de série, MAC, IPs nem redes Wi-Fi', () => {
+    // O perfil vai no pedido ao modelo de IA.
+    const codigo = fs.readFileSync(path.join(__dirname, '..', 'agents', 'perfilPC.js'), 'utf8');
+    for (const proibido of ['SerialNumber', 'MACAddress', 'IPAddress', 'SSID', 'UUID']) {
+      assert(!codigo.includes(proibido), `o perfil recolhe ${proibido}`);
+    }
+  });
+});
+
+describe('🧭 Perguntas sobre o PC chegam à ferramenta de comandos', () => {
+  const tools = require('../orchestrator/tools');
+  const toolLoop = require('../orchestrator/toolLoop');
+  const fs = require('fs');
+
+  const nomes = (msg) => tools.seleccionar(msg).map(f => f.nome);
+
+  test('"quanto ocupa a pasta transferências" leva a ferramenta de comandos', () => {
+    assertEqual(nomes('quanto ocupa a minha pasta de transferências?')[0], 'consultar_pc');
+  });
+
+  test('"tenho o VLC instalado?" leva o perfil do PC', () => {
+    assert(nomes('tenho o VLC instalado?').includes('perfil_do_pc'));
+  });
+
+  test('um pedido sem palavras conhecidas ainda leva a ferramenta de comandos', () => {
+    assert(nomes('olá').includes('consultar_pc'));
+  });
+
+  test('as horas continuam a chegar pelas palavras', () => {
+    assert(nomes('que horas são?').includes('data_e_hora'));
+  });
+
+  test('as notas só vão quando a ferramenta de comandos vai no menu', () => {
+    comPastaDeDados(() => {
+      require('../agents/comandosAgent').registarSucesso('quanto ocupa a pasta transferências', 'SCRIPT-APRENDIDO');
+      const com = tools.notasDasFerramentas(tools.seleccionar('quanto ocupa a pasta transferências'), 'quanto ocupa a pasta transferências');
+      assertIncludes(com || '', 'SCRIPT-APRENDIDO');
+      const sem = tools.notasDasFerramentas([tools.porNome('pesquisar_web')], 'quanto ocupa a pasta transferências');
+      assertEqual(sem, null);
+    });
+  });
+
+  test('as duas ferramentas só leem, e a de comandos passa pelas regras', () => {
+    assertEqual(tools.porNome('consultar_pc').risco, 'ler');
+    assertEqual(tools.porNome('perfil_do_pc').risco, 'ler');
+    const codigo = fs.readFileSync(path.join(__dirname, '..', 'agents', 'comandosAgent.js'), 'utf8');
+    const consultar = codigo.slice(codigo.indexOf('async function consultar'));
+    assert(consultar.indexOf('regras.verificar') < consultar.indexOf('correrLeitura('), 'corre antes de verificar');
+  });
+
+  test('o modelo sabe que só pode ler e que não contorna as regras', () => {
+    assertIncludes(toolLoop.SISTEMA, 'só de leitura');
+    assertIncludes(toolLoop.SISTEMA, 'não\ntentes contorná-las');
+  });
+});
+
+describe('🪟 PowerShell: repetir só quando nem chegou a arrancar', () => {
+  const powershell = require('../agents/powershell');
+
+  test('um spawn recusado repete-se', () => {
+    assert(powershell.naoArrancou({ code: 'EPERM', syscall: 'spawn powershell' }));
+  });
+
+  test('um comando que correu e falhou não se repete', () => {
+    assert(!powershell.naoArrancou({ code: 1 }));
+    assert(!powershell.naoArrancou({ code: 'EPERM', syscall: 'open' }));
+    assert(!powershell.naoArrancou(null));
+  });
+});
+
 Promise.all(pendentes).then(() => {
   console.log('\n' + '═'.repeat(55));
   console.log(`\n🧪 RESULTADO: ${passed}/${totalTests} testes passaram`);

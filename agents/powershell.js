@@ -42,13 +42,32 @@ function comPlicas(valor) {
   return `'${String(valor).replace(/'/g, "''")}'`;
 }
 
+/**
+ * O Windows às vezes recusa arrancar o processo ("spawn EPERM"), sobretudo com
+ * vários PowerShell seguidos. Nesse caso o script nem começou, por isso repetir
+ * não corre nada duas vezes.
+ */
+function naoArrancou(err) {
+  return Boolean(err && String(err.syscall || '').startsWith('spawn') && ['EPERM', 'EAGAIN', 'EBUSY'].includes(err.code));
+}
+
 async function correr(script, opcoes = {}) {
-  const { stdout } = await execFileAsync('powershell', argumentos(script), {
+  const definicoes = {
     timeout: opcoes.timeout || TEMPO_MAXIMO_MS,
     windowsHide: true,
     maxBuffer: opcoes.maxBuffer || 1024 * 1024
-  });
-  return stdout;
+  };
+  if (opcoes.env) definicoes.env = opcoes.env;
+
+  try {
+    const { stdout } = await execFileAsync('powershell', argumentos(script), definicoes);
+    return stdout;
+  } catch (err) {
+    if (!naoArrancou(err)) throw err;
+    await new Promise(r => setTimeout(r, 300));
+    const { stdout } = await execFileAsync('powershell', argumentos(script), definicoes);
+    return stdout;
+  }
 }
 
 function correrSync(script, opcoes = {}) {
@@ -60,4 +79,4 @@ function correrSync(script, opcoes = {}) {
   });
 }
 
-module.exports = { correr, correrSync, comPlicas, codificar };
+module.exports = { correr, correrSync, comPlicas, codificar, naoArrancou };

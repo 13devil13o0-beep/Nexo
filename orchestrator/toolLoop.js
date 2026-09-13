@@ -53,6 +53,11 @@ o computador (fechar programas, limpar temporários, mexer no arranque) não as
 fazes tu: preparas uma de cada vez, explicas o que vai acontecer, e é o
 utilizador que confirma. Nunca digas que uma acção preparada já foi feita.
 
+Para perguntas sobre este PC que nenhuma ferramenta responde directamente,
+escreve tu um comando PowerShell só de leitura e corre-o. Se um comando que já
+resultou neste PC servir, reutiliza-o. Se as regras recusarem um comando, não
+tentes contorná-las: escreve outro que só leia, ou diz o que não foi possível.
+
 Depois de receberes o resultado de uma ferramenta, responde ao utilizador em
 português europeu, de forma directa e curta. Não descrevas os passos que deste
 nem menciones nomes de ferramentas.`;
@@ -64,6 +69,15 @@ nem menciones nomes de ferramentas.`;
 function textoRecente(historico) {
   if (!Array.isArray(historico)) return '';
   return historico.slice(-4).map(m => String(m?.content || '').slice(0, 4000)).join(' ');
+}
+
+/**
+ * As instruções do sistema, mais o que as ferramentas escolhidas querem que o
+ * modelo saiba (o perfil do PC e os comandos que resultaram antes).
+ */
+function sistemaPara(seleccionadas, mensagem) {
+  const notas = tools.notasDasFerramentas(seleccionadas, mensagem);
+  return notas ? `${SISTEMA}\n\n${notas}` : SISTEMA;
 }
 
 /**
@@ -96,7 +110,7 @@ async function correr(mensagem, contexto = {}) {
 
   const esquemas = tools.paraFormatoOpenAI(seleccionadas);
 
-  const mensagens = [{ role: 'system', content: SISTEMA }];
+  const mensagens = [{ role: 'system', content: sistemaPara(seleccionadas, mensagem) }];
   if (Array.isArray(contexto.historico)) {
     for (const m of contexto.historico.slice(-6)) {
       mensagens.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content });
@@ -196,7 +210,7 @@ async function correrComStream(mensagem, contexto = {}, saidas = {}) {
 
   const esquemas = tools.paraFormatoOpenAI(seleccionadas);
 
-  const mensagens = [{ role: 'system', content: SISTEMA }];
+  const mensagens = [{ role: 'system', content: sistemaPara(seleccionadas, mensagem) }];
   if (Array.isArray(contexto.historico)) {
     for (const m of contexto.historico.slice(-6)) {
       mensagens.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content });
