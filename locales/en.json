@@ -1,6 +1,6 @@
 {
   "general": {
-    "confirmation_required": "⚠️ **Confirmation Required**\n\n{{reason}}\n\nAre you sure? (reply \"yes, confirm\")",
+    "confirmation_required": "⚠️ **{{reason}}**\n\nFor safety, I won't do this from a direct command. Tell me what you want to do and I'll prepare the action and show it to you before doing it.",
     "error": "❌ Error processing: {{message}}",
     "plugin_no_response": "❌ Plugin returned no response.",
     "project_cancelled": "❌ Project cancelled.",

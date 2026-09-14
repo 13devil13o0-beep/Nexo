@@ -77,12 +77,6 @@ async function handlePrompt(prompt, context = {}) {
       content: prompt
     });
     
-    // Verificar se ação requer confirmação
-    const confirmation = decisionEngine.requiresConfirmation(prompt);
-    if (confirmation.required && !context.confirmed) {
-      return t('general.confirmation_required', { reason: confirmation.reason });
-    }
-    
     // Log da ação
     security.logAction(userId, 'prompt-received', {
       prompt: prompt.substring(0, 100),
@@ -138,6 +132,28 @@ async function handlePrompt(prompt, context = {}) {
       ? { entities: {}, ...context.intencao, confidence: 1, method: 'botao' }
       : null;
     const intentData = escolhida || await intentParser.parseIntentSmart(prompt);
+
+    // ═══ Palavras de risco num pedido que pode agir ═══
+    //
+    // Esta verificação corria sobre qualquer mensagem, antes de se saber o
+    // que ela era. Medido: um texto colado para análise tinha "~$15 000" numa
+    // tabela, o padrão de dinheiro apanhou-o, e o pedido morreu com uma
+    // resposta vazia. Pior: o aviso pedia "sim, confirmo", e nada no NEXO
+    // marca um pedido como confirmado. Era um beco sem saída.
+    //
+    // Continua a proteger o que pode mesmo agir por uma regra (correr
+    // comandos, scripts, criar ficheiros), os pedidos com vários passos e as
+    // extensões. As acções no PC feitas pelo modelo têm o seu próprio "sim",
+    // em orchestrator/accoesPendentes.js.
+    const confirmation = decisionEngine.requiresConfirmation(prompt);
+    const podeAgir = intentParser.INTENCOES_QUE_MEXEM.has(intentData.intent) ||
+      (!escolhida && (agentChaining.isMultiStep(prompt) || !!pluginLoader.matchIntent(prompt)));
+    if (confirmation.required && !context.confirmed && podeAgir) {
+      const aviso = t('general.confirmation_required', { reason: confirmation.reason });
+      conversationStore.addMessage(conversation.id, { role: 'assistant', content: aviso });
+      return { text: aviso, outputMode: 'text', shouldSpeak: false, speakableText: null, conversationId: conversation.id, elapsed: Date.now() - startTime };
+    }
+
     const classification = decisionEngine.classifyIntent(prompt);
     security.logAction(userId, 'intent-parsed', { 
       intent: intentData.intent,

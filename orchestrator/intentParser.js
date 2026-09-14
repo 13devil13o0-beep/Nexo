@@ -1319,6 +1319,10 @@ const INTENCOES_QUE_MEXEM = new Set([
   'input_scroll',
   'input_move',
   'input_paste',
+  // Medido: um texto de 4800 caracteres colado para análise tinha "rede de
+  // captura" numa tabela, e foi lido como pedido para capturar o ecrã.
+  'input_screenshot',
+  'input_copy',
   'remote_execute',
   'delete_task',
   'delete_skill',
@@ -1548,5 +1552,7 @@ module.exports = {
   parseIntent,
   parseIntentSmart,
   looksLikeCode,
-  INTENT_PATTERNS
+  pareceComando,
+  INTENT_PATTERNS,
+  INTENCOES_QUE_MEXEM
 };

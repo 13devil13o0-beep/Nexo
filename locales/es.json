@@ -1,6 +1,6 @@
 {
   "general": {
-    "confirmation_required": "⚠️ **Confirmación Necesaria**\n\n{{reason}}\n\n¿Estás seguro? (responde \"sí, confirmo\")",
+    "confirmation_required": "⚠️ **{{reason}}**\n\nPor seguridad, no hago esto a partir de una orden directa. Explícame lo que quieres hacer y preparo la acción y te la muestro antes de hacerla.",
     "error": "❌ Error al procesar: {{message}}",
     "plugin_no_response": "❌ El plugin no devolvió respuesta.",
     "project_cancelled": "❌ Proyecto cancelado.",

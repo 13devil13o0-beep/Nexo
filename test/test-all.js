@@ -5065,6 +5065,46 @@ describe('🪟 Janelas a sério: numa janela de teste, nunca nas do utilizador',
   });
 });
 
+describe('📋 Um texto colado para análise não é uma ordem', () => {
+  const { parseIntent } = require('../orchestrator/intentParser');
+  const fs = require('fs');
+
+  const colado = [
+    'Com este contexto a realidade muda. Existem vários sistemas com uma distinção crítica.',
+    'Parâmetro\tValor',
+    'Método de abate\tRede de captura (recuperável) ou cinético',
+    'Preço\t~$15 000 por unidade',
+    'Resultado: sistema validado. Acho que antes de avançarmos deveríamos avaliar isto.'
+  ].join('\n');
+
+  test('"rede de captura" no meio de um texto não tira uma captura de ecrã', () => {
+    // Medido: um texto de 4800 caracteres com esta tabela foi lido como
+    // pedido de captura de ecrã, e a resposta foi "Não consegui responder".
+    assertEqual(parseIntent(colado).intent, 'chat');
+  });
+
+  test('pedir uma captura de ecrã continua a funcionar', () => {
+    assertEqual(parseIntent('tira uma captura de ecrã').intent, 'input_screenshot');
+    assertEqual(parseIntent('screenshot').intent, 'input_screenshot');
+  });
+
+  test('as palavras de risco só travam pedidos que podem agir, e o aviso chega ao ecrã', () => {
+    const codigo = fs.readFileSync(path.join(__dirname, '..', 'orchestrator', 'orchestrator.js'), 'utf8');
+    const antesDaIntencao = codigo.slice(codigo.indexOf('async function handlePrompt'), codigo.indexOf('parseIntentSmart(prompt)'));
+    assert(!antesDaIntencao.includes('requiresConfirmation'), 'a verificação voltou a correr antes de se saber o que é o pedido');
+    const guarda = codigo.slice(codigo.indexOf('requiresConfirmation(prompt)'), codigo.indexOf('classifyIntent(prompt)'));
+    assertIncludes(guarda, 'INTENCOES_QUE_MEXEM');
+    assertIncludes(guarda, 'return { text: aviso');
+  });
+
+  test('o aviso já não pede um "sim, confirmo" que nada trata', () => {
+    for (const lingua of ['pt', 'en', 'es', 'fr']) {
+      const texto = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'locales', `${lingua}.json`), 'utf8')).general.confirmation_required;
+      assert(!/confirmo|confirm"|je confirme/i.test(texto), `${lingua}: ${texto}`);
+    }
+  });
+});
+
 Promise.all(pendentes).then(() => {
   console.log('\n' + '═'.repeat(55));
   console.log(`\n🧪 RESULTADO: ${passed}/${totalTests} testes passaram`);
